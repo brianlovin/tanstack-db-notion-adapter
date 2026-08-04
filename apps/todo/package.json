@@ -1,0 +1,51 @@
+{
+  "name": "notion-todo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "vp check && vp build",
+    "check": "vp check",
+    "test": "vp test --run",
+    "serve": "tsx server.ts",
+    "preview": "vp preview",
+    "schema:generate": "node ../../dist/cli.js generate --manifest notion.schema.json --out src/todo-schema.generated.ts",
+    "schema:check": "node ../../dist/cli.js check --env ../../examples/todos/.env --manifest notion.schema.json",
+    "schema:push": "node ../../dist/cli.js push --env ../../examples/todos/.env --manifest notion.schema.json --out src/todo-schema.generated.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.0",
+    "@tanstack/react-db": "^0.1.95",
+    "@tanstack/react-virtual": "^3.14.9",
+    "dotenv": "^17.4.2",
+    "fractional-indexing": "^4.0.0",
+    "hono": "^4.13.0",
+    "lucide-react": "^1.28.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "tanstack-db-notion-adapter": "file:../.."
+  },
+  "devDependencies": {
+    "@testing-library/jest-dom": "^7.0.0",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.3",
+    "@types/node": "^26.1.2",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vitejs/plugin-react": "^6.0.5",
+    "jsdom": "^30.0.1",
+    "tsx": "^4.23.5",
+    "typescript": "~6.0.2",
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.7",
+    "vite-plugin-pwa": "^1.3.0",
+    "vite-plus": "0.2.7",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {
+    "vite": "npm:@voidzero-dev/vite-plus-core@0.2.7"
+  },
+  "engines": {
+    "node": ">=22.13"
+  }
+}

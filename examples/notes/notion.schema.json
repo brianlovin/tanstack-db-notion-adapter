@@ -1,0 +1,77 @@
+{
+  "$schema": "../../schema/notion.schema.json",
+  "version": 1,
+  "notionVersion": "2026-03-11",
+  "dataSourceId": "3b2c711c-0ceb-80df-b2f2-000ba7723002",
+  "exportName": "noteSchema",
+  "syncKey": {
+    "key": "id",
+    "name": "Client ID",
+    "propertyId": "qAe%5D"
+  },
+  "metadata": {
+    "pageId": "notionPageId",
+    "pageUrl": "notionUrl",
+    "createdTime": "createdAt",
+    "lastEditedTime": "updatedAt"
+  },
+  "properties": [
+    {
+      "key": "pinned",
+      "propertyId": "%3A%3FeO",
+      "name": "Pinned",
+      "type": "checkbox",
+      "config": {},
+      "defaultValue": false
+    },
+    {
+      "key": "entryDate",
+      "propertyId": "HZXp",
+      "name": "Entry date",
+      "type": "date",
+      "config": {}
+    },
+    {
+      "key": "kind",
+      "propertyId": "%5BR%5C%60",
+      "name": "Kind",
+      "type": "select",
+      "config": {
+        "options": [
+          {
+            "id": "a8662ded-b15f-4725-8f3c-d303e7354913",
+            "name": "Note",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "1c28f5df-19f6-4f95-920d-721d3858445d",
+            "name": "Journal",
+            "color": "green",
+            "description": null
+          }
+        ]
+      },
+      "options": [
+        {
+          "name": "Note",
+          "id": "a8662ded-b15f-4725-8f3c-d303e7354913",
+          "color": "gray"
+        },
+        {
+          "name": "Journal",
+          "id": "1c28f5df-19f6-4f95-920d-721d3858445d",
+          "color": "green"
+        }
+      ],
+      "defaultValue": "Note"
+    },
+    {
+      "key": "title",
+      "propertyId": "title",
+      "name": "Name",
+      "type": "title",
+      "config": {}
+    }
+  ]
+}

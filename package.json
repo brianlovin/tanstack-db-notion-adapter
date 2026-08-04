@@ -1,0 +1,88 @@
+{
+  "name": "tanstack-db-notion-adapter",
+  "version": "0.2.0",
+  "description": "Offline-first, end-to-end typed TanStack DB collections backed by Notion data sources",
+  "type": "module",
+  "license": "MIT",
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "LICENSE",
+    "SECURITY.md",
+    "docs",
+    "schema",
+    "skills"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "tanstack-db-notion": "./bin/tanstack-db-notion.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./schema-tools": {
+      "types": "./dist/schema-tools.d.ts",
+      "import": "./dist/schema-tools.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "build:example": "npm run build:example:todos && npm run build:example:notes && npm run build:example:reliability",
+    "build:example:todos": "vite build --config examples/todos/vite.config.ts",
+    "build:example:notes": "vite build --config examples/notes/vite.config.ts",
+    "build:example:reliability": "vite build --config examples/reliability/vite.config.ts",
+    "schema:generate": "npm run build && node dist/cli.js generate --manifest examples/todos/notion.schema.json --out examples/todos/src/todo-schema.generated.ts",
+    "schema:pull": "npm run build && node dist/cli.js pull --env examples/todos/.env --manifest examples/todos/notion.schema.json --out examples/todos/src/todo-schema.generated.ts",
+    "schema:push": "npm run build && node dist/cli.js push --env examples/todos/.env --manifest examples/todos/notion.schema.json --out examples/todos/src/todo-schema.generated.ts",
+    "schema:notes:generate": "npm run build && node dist/cli.js generate --manifest examples/notes/notion.schema.json --out examples/notes/src/note-schema.generated.ts",
+    "schema:notes:pull": "npm run build && node dist/cli.js pull --env examples/notes/.env --manifest examples/notes/notion.schema.json --out examples/notes/src/note-schema.generated.ts",
+    "schema:notes:push": "npm run build && node dist/cli.js push --env examples/notes/.env --manifest examples/notes/notion.schema.json --out examples/notes/src/note-schema.generated.ts",
+    "typecheck": "tsc --noEmit && tsc -p examples/todos/tsconfig.json --noEmit && tsc -p examples/notes/tsconfig.json --noEmit && tsc -p examples/reliability/tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:package": "npm run build && node scripts/package-smoke.mjs",
+    "test:watch": "vitest",
+    "dev": "npm run build && concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "tsx watch examples/todos/server.ts",
+    "dev:web": "vite --config examples/todos/vite.config.ts",
+    "dev:notes": "npm run build && concurrently -n api,web -c blue,magenta \"npm:dev:notes:api\" \"npm:dev:notes:web\"",
+    "dev:notes:api": "tsx watch examples/notes/server.ts",
+    "dev:notes:web": "vite --config examples/notes/vite.config.ts",
+    "dev:reliability": "npm run build && concurrently -n api,web -c blue,magenta \"npm:dev:reliability:api\" \"npm:dev:reliability:web\"",
+    "dev:reliability:api": "tsx watch examples/reliability/server.ts",
+    "dev:reliability:web": "vite --config examples/reliability/vite.config.ts",
+    "preview": "vite preview --config examples/todos/vite.config.ts"
+  },
+  "dependencies": {
+    "@standard-schema/spec": "^1.1.0",
+    "@tanstack/db": "0.6.17"
+  },
+  "devDependencies": {
+    "@hono/node-server": "^2.0.12",
+    "@tanstack/react-db": "^0.1.95",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "latest",
+    "concurrently": "^9.2.1",
+    "dotenv": "^17.2.3",
+    "fake-indexeddb": "^6.2.5",
+    "hono": "^4.12.34",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "tsx": "^4.23.5",
+    "typescript": "^5.9.2",
+    "vite": "^8.2.0",
+    "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=20.19"
+  }
+}

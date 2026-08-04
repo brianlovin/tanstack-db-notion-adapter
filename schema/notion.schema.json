@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://unpkg.com/tanstack-db-notion-adapter/schema/notion.schema.json",
+  "title": "TanStack DB Notion schema manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "notionVersion", "exportName", "syncKey", "metadata", "properties"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": { "const": 1 },
+    "notionVersion": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+    "dataSourceId": { "type": "string", "minLength": 1 },
+    "exportName": { "type": "string", "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$" },
+    "syncKey": { "$ref": "#/$defs/syncKey" },
+    "metadata": { "$ref": "#/$defs/metadata" },
+    "properties": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/property" }
+    }
+  },
+  "$defs": {
+    "identifier": { "type": "string", "pattern": "^[A-Za-z_$][A-Za-z0-9_$]*$" },
+    "reference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "name"],
+      "properties": {
+        "key": { "$ref": "#/$defs/identifier" },
+        "name": { "type": "string", "minLength": 1 },
+        "propertyId": { "type": "string", "minLength": 1 }
+      }
+    },
+    "syncKey": { "$ref": "#/$defs/reference" },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pageId", "pageUrl", "createdTime", "lastEditedTime"],
+      "properties": {
+        "pageId": { "$ref": "#/$defs/identifier" },
+        "pageUrl": { "$ref": "#/$defs/identifier" },
+        "createdTime": { "$ref": "#/$defs/identifier" },
+        "lastEditedTime": { "$ref": "#/$defs/identifier" }
+      }
+    },
+    "option": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "minLength": 1 },
+        "color": { "type": "string" }
+      }
+    },
+    "property": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "name", "type"],
+      "properties": {
+        "key": { "$ref": "#/$defs/identifier" },
+        "propertyId": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "type": { "type": "string", "minLength": 1 },
+        "options": { "type": "array", "items": { "$ref": "#/$defs/option" } },
+        "defaultValue": {
+          "type": ["string", "number", "boolean", "null", "array"],
+          "items": { "type": "string" }
+        },
+        "config": { "type": "object" }
+      }
+    }
+  }
+}

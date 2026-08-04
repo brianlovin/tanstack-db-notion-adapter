@@ -1,0 +1,88 @@
+{
+  "$schema": "../../schema/notion.schema.json",
+  "version": 1,
+  "notionVersion": "2026-03-11",
+  "dataSourceId": "3b1c711c-0ceb-80a2-8c62-000bae4f0170",
+  "exportName": "todoSchema",
+  "syncKey": {
+    "key": "id",
+    "name": "Client ID",
+    "propertyId": "BBWX"
+  },
+  "metadata": {
+    "pageId": "notionPageId",
+    "pageUrl": "notionUrl",
+    "createdTime": "createdAt",
+    "lastEditedTime": "updatedAt"
+  },
+  "properties": [
+    {
+      "key": "priority",
+      "propertyId": "%5BNmD",
+      "name": "Priority",
+      "type": "select",
+      "config": {
+        "options": [
+          {
+            "id": "27fb76d5-4391-4fbe-9a7a-664b0b9634aa",
+            "name": "Low",
+            "color": "gray",
+            "description": null
+          },
+          {
+            "id": "80efeb4a-2c64-4639-b85a-6165425784f1",
+            "name": "Medium",
+            "color": "blue",
+            "description": null
+          },
+          {
+            "id": "96740d9b-7509-4f37-a11c-2659d001cabb",
+            "name": "High",
+            "color": "red",
+            "description": null
+          }
+        ]
+      },
+      "options": [
+        {
+          "name": "Low",
+          "id": "27fb76d5-4391-4fbe-9a7a-664b0b9634aa",
+          "color": "gray"
+        },
+        {
+          "name": "Medium",
+          "id": "80efeb4a-2c64-4639-b85a-6165425784f1",
+          "color": "blue"
+        },
+        {
+          "name": "High",
+          "id": "96740d9b-7509-4f37-a11c-2659d001cabb",
+          "color": "red"
+        }
+      ],
+      "defaultValue": "Medium"
+    },
+    {
+      "key": "completed",
+      "propertyId": "aKwF",
+      "name": "Done",
+      "type": "checkbox",
+      "config": {},
+      "defaultValue": false
+    },
+    {
+      "key": "dueDate",
+      "propertyId": "xZ%40V",
+      "name": "Due",
+      "type": "date",
+      "config": {}
+    },
+    {
+      "key": "title",
+      "propertyId": "title",
+      "name": "Name",
+      "type": "title",
+      "config": {}
+    }
+  ]
+}

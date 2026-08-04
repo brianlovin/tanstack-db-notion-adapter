@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "jsx": "react-jsx",
+    "paths": {
+      "tanstack-db-notion-adapter": ["src/index.ts"],
+      "tanstack-db-notion-adapter/server": ["src/server.ts"]
+    },
+    "types": ["node", "vite/client"],
+    "noEmit": true
+  },
+  "include": ["src", "server.ts", "vite.config.ts"]
+}

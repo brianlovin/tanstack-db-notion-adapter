@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+.DS_Store
+.env
+examples/todos/.env
+examples/todos/dist
+examples/notes/.env
+examples/notes/dist
+*.tsbuildinfo

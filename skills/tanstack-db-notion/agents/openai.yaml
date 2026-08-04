@@ -1,0 +1,4 @@
+interface:
+  display_name: "TanStack DB Notion"
+  short_description: "Connect and evolve typed Notion collections"
+  default_prompt: "Use $tanstack-db-notion to connect this app to a typed, offline-ready Notion collection."

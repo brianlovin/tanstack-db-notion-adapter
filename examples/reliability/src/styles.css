@@ -1,0 +1,757 @@
+:root {
+  color: #102a43;
+  background: #e9eef2;
+  font-family: "Avenir Next", Avenir, "Segoe UI", sans-serif;
+  font-synthesis: none;
+  --lab-sheet: #e9eef2;
+  --instrument: #102a43;
+  --cobalt: #2458d3;
+  --orange: #ed6a3a;
+  --teal: #087e6a;
+  --paper: #f9fbfc;
+  --rule: #b8c4ce;
+  --muted: #5f7283;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    linear-gradient(rgba(16, 42, 67, 0.035) 1px, transparent 1px),
+    var(--lab-sheet);
+  background-size: 100% 28px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  color: inherit;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 3px solid rgba(36, 88, 211, 0.28);
+  outline-offset: 2px;
+}
+
+.lab-shell {
+  width: min(1480px, calc(100% - 40px));
+  margin: 0 auto;
+  padding: 24px 0 38px;
+}
+
+.lab-header,
+.lab-thesis,
+.panel-heading,
+.lab-identity,
+.header-instruments,
+.sync-readout {
+  display: flex;
+  align-items: center;
+}
+
+.lab-header {
+  min-height: 72px;
+  justify-content: space-between;
+  gap: 24px;
+  border-block: 2px solid var(--instrument);
+}
+
+.lab-identity {
+  gap: 14px;
+}
+
+.lab-symbol {
+  display: grid;
+  width: 47px;
+  height: 47px;
+  place-items: center;
+  color: var(--paper);
+  background: var(--instrument);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+}
+
+.eyebrow {
+  margin: 0 0 5px;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.13em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin-top: 0;
+}
+
+h1,
+h2 {
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-weight: 700;
+  letter-spacing: -0.035em;
+}
+
+h1 {
+  margin-bottom: 0;
+  font-size: 24px;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.header-instruments {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.header-instruments button,
+.scenario-action,
+.incident-composer button {
+  min-height: 38px;
+  border: 1px solid var(--instrument);
+  border-radius: 2px;
+  padding: 0 14px;
+  cursor: pointer;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.48;
+}
+
+.network-switch,
+.quiet-button {
+  background: transparent;
+}
+
+.network-switch span {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--orange);
+}
+
+.network-switch.is-online span {
+  background: var(--teal);
+  box-shadow: 0 0 0 4px rgba(8, 126, 106, 0.12);
+}
+
+.run-all {
+  color: var(--paper);
+  background: var(--cobalt);
+}
+
+.lab-thesis {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.45fr) minmax(260px, 0.75fr) 130px;
+  gap: 44px;
+  min-height: 235px;
+  padding: 38px 0 34px;
+}
+
+.lab-thesis h2 {
+  max-width: 700px;
+  margin-bottom: 0;
+  font-size: clamp(48px, 6.2vw, 88px);
+  line-height: 0.86;
+  text-transform: uppercase;
+}
+
+.lab-thesis h2 span {
+  color: var(--cobalt);
+}
+
+.lab-thesis > p {
+  align-self: end;
+  margin-bottom: 3px;
+  color: #334e68;
+  font-size: 15px;
+  line-height: 1.55;
+}
+
+.score-dial {
+  align-self: end;
+  border-left: 1px solid var(--rule);
+  padding-left: 22px;
+}
+
+.score-dial strong {
+  display: block;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 72px;
+  line-height: 0.8;
+}
+
+.score-dial span {
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.scenario-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border: 1px solid var(--instrument);
+  background: rgba(249, 251, 252, 0.62);
+}
+
+.scenario-card {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 350px;
+  padding: 20px 20px 18px;
+  border-right: 1px solid var(--instrument);
+  background: rgba(249, 251, 252, 0.86);
+  transition: background 160ms ease;
+}
+
+.scenario-card:last-of-type {
+  border-right: 0;
+}
+
+.scenario-passed {
+  background: rgba(230, 246, 241, 0.94);
+}
+
+.scenario-failed {
+  background: rgba(255, 235, 226, 0.96);
+}
+
+.scenario-running {
+  background: #edf2ff;
+}
+
+.scenario-index {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 34px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.status-mark {
+  display: grid;
+  width: 24px;
+  height: 24px;
+  place-items: center;
+  border: 1px solid var(--rule);
+  border-radius: 50%;
+  color: var(--paper);
+}
+
+.status-passed {
+  border-color: var(--teal);
+  background: var(--teal);
+}
+
+.status-failed {
+  border-color: var(--orange);
+  background: var(--orange);
+}
+
+.status-running {
+  border: 2px dotted var(--cobalt);
+  animation: spin 2s linear infinite;
+}
+
+.scenario-card h2 {
+  margin-bottom: 10px;
+  font-size: 30px;
+  line-height: 0.96;
+  text-transform: uppercase;
+}
+
+.scenario-promise {
+  min-height: 60px;
+  margin-bottom: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.scenario-evidence {
+  padding-top: 13px;
+  border-top: 1px solid var(--rule);
+}
+
+.scenario-evidence strong {
+  font-size: 12px;
+}
+
+.scenario-evidence ul {
+  margin: 8px 0 0;
+  padding-left: 15px;
+  color: #486581;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  line-height: 1.65;
+}
+
+.scenario-action {
+  width: 100%;
+  margin-top: auto;
+  background: transparent;
+}
+
+.scenario-action:hover:not(:disabled) {
+  color: var(--paper);
+  background: var(--instrument);
+}
+
+.signal-trace {
+  position: absolute;
+  z-index: 2;
+  top: 72px;
+  right: 0;
+  left: 0;
+  height: 1px;
+  pointer-events: none;
+  background: var(--cobalt);
+}
+
+.signal-trace span {
+  position: absolute;
+  top: -4px;
+  left: 2%;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--paper);
+  border-radius: 50%;
+  background: var(--orange);
+  animation: trace 7s linear infinite;
+}
+
+.workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) minmax(340px, 0.75fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.incident-panel,
+.recorder-panel {
+  min-height: 420px;
+  border: 1px solid var(--instrument);
+  background: var(--paper);
+}
+
+.panel-heading {
+  justify-content: space-between;
+  min-height: 76px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--instrument);
+}
+
+.panel-heading h2 {
+  margin-bottom: 0;
+  font-size: 27px;
+  text-transform: uppercase;
+}
+
+.sync-readout {
+  display: grid;
+  grid-template-columns: 9px auto;
+  column-gap: 8px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.sync-readout small {
+  grid-column: 2;
+  color: var(--muted);
+}
+
+.sync-lamp {
+  grid-row: 1 / span 2;
+  width: 8px;
+  height: 8px;
+  margin-top: 3px;
+  border-radius: 50%;
+  background: var(--teal);
+}
+
+.sync-error,
+.sync-offline {
+  background: var(--orange);
+}
+
+.sync-syncing,
+.sync-hydrating {
+  background: var(--cobalt);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.incident-composer {
+  padding: 18px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.incident-composer label {
+  display: block;
+  margin-bottom: 7px;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.incident-composer div {
+  display: grid;
+  grid-template-columns: 1fr auto;
+}
+
+.incident-composer input,
+.incident-row input,
+.incident-row select {
+  min-width: 0;
+  border: 1px solid var(--rule);
+  border-radius: 0;
+  color: var(--instrument);
+  background: transparent;
+}
+
+.incident-composer input {
+  height: 42px;
+  padding: 0 12px;
+  border-right: 0;
+}
+
+.incident-composer button {
+  height: 42px;
+  color: var(--paper);
+  background: var(--instrument);
+}
+
+.incident-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.incident-row {
+  display: grid;
+  grid-template-columns: 54px minmax(180px, 1fr) 132px 82px;
+  gap: 12px;
+  align-items: center;
+  padding: 13px 18px;
+  border-bottom: 1px solid #d5dde4;
+}
+
+.severity {
+  padding: 5px 6px;
+  color: var(--cobalt);
+  background: #e8efff;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  font-weight: 800;
+  text-align: center;
+  text-transform: uppercase;
+}
+
+.severity-high {
+  color: #a23e1c;
+  background: #ffe8df;
+}
+
+.incident-copy input {
+  width: 100%;
+  padding: 5px 7px;
+  border-color: transparent;
+  font-weight: 700;
+}
+
+.incident-copy input:hover,
+.incident-copy input:focus {
+  border-color: var(--rule);
+}
+
+.incident-copy small {
+  display: block;
+  margin: 2px 7px 0;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.incident-row select {
+  height: 32px;
+  padding: 0 7px;
+  font-size: 11px;
+}
+
+.empty-copy {
+  max-width: 410px;
+  margin: 58px auto;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.55;
+  text-align: center;
+}
+
+.recorder-panel {
+  color: #dce8f2;
+  background: var(--instrument);
+}
+
+.recorder-panel .panel-heading {
+  border-color: #64809a;
+}
+
+.recorder-panel .eyebrow {
+  color: #91a8bc;
+}
+
+.recording-light {
+  color: #ff9a72;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+}
+
+.recording-light::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--orange);
+  animation: pulse 1.4s ease-in-out infinite;
+}
+
+.telemetry-strip {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  margin: 0;
+  border-bottom: 1px solid #64809a;
+}
+
+.telemetry-strip div {
+  padding: 13px;
+  border-right: 1px solid #64809a;
+}
+
+.telemetry-strip div:last-child {
+  border-right: 0;
+}
+
+.telemetry-strip dt {
+  min-height: 24px;
+  color: #91a8bc;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 8px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.telemetry-strip dd {
+  margin: 0;
+  font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
+  font-size: 28px;
+  font-weight: 700;
+}
+
+.event-log {
+  max-height: 350px;
+  margin: 0;
+  padding: 0;
+  overflow: auto;
+  list-style: none;
+}
+
+.event-log li {
+  display: grid;
+  grid-template-columns: 74px 1fr;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgba(145, 168, 188, 0.35);
+}
+
+.event-log time {
+  color: #91a8bc;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+}
+
+.event-log p {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.event-pass p {
+  color: #83dbc9;
+}
+
+.event-fail p {
+  color: #ff9a72;
+}
+
+.event-active p {
+  color: #9db9ff;
+}
+
+footer {
+  display: flex;
+  justify-content: space-between;
+  padding: 13px 2px 0;
+  color: var(--muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+@keyframes trace {
+  from { left: 2%; }
+  to { left: calc(98% - 9px); }
+}
+
+@keyframes pulse {
+  50% { opacity: 0.35; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 1050px) {
+  .lab-header {
+    align-items: flex-start;
+    padding: 14px 0;
+  }
+
+  .lab-thesis {
+    grid-template-columns: 1fr 0.65fr;
+  }
+
+  .score-dial {
+    display: none;
+  }
+
+  .scenario-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .scenario-card:nth-of-type(2) {
+    border-right: 0;
+  }
+
+  .scenario-card:nth-of-type(-n + 2) {
+    border-bottom: 1px solid var(--instrument);
+  }
+
+  .signal-trace {
+    display: none;
+  }
+
+  .workbench {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .lab-shell {
+    width: min(100% - 24px, 620px);
+    padding-top: 12px;
+  }
+
+  .lab-header,
+  .lab-thesis {
+    display: block;
+  }
+
+  .header-instruments {
+    justify-content: flex-start;
+    margin-top: 14px;
+  }
+
+  .quiet-button {
+    display: none;
+  }
+
+  .lab-thesis {
+    min-height: 0;
+    padding: 44px 0 30px;
+  }
+
+  .lab-thesis h2 {
+    font-size: clamp(46px, 16vw, 70px);
+  }
+
+  .lab-thesis > p {
+    margin-top: 24px;
+  }
+
+  .scenario-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .scenario-card,
+  .scenario-card:nth-of-type(2) {
+    min-height: 330px;
+    border-right: 0;
+    border-bottom: 1px solid var(--instrument);
+  }
+
+  .scenario-card:last-of-type {
+    border-bottom: 0;
+  }
+
+  .incident-row {
+    grid-template-columns: 54px 1fr;
+  }
+
+  .incident-row select {
+    grid-column: 2;
+  }
+
+  .telemetry-strip dt {
+    min-height: 34px;
+  }
+
+  footer {
+    display: grid;
+    gap: 5px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
