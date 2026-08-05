@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, join, resolve } from 'node:path'
 import { promisify } from 'node:util'
@@ -13,6 +13,10 @@ async function run(command, args, cwd = temporaryRoot) {
     return await exec(command, args, {
       cwd,
       encoding: 'utf8',
+      env:
+        command === 'npm'
+          ? { ...process.env, npm_config_dry_run: 'false' }
+          : process.env,
       maxBuffer: 10 * 1024 * 1024,
     })
   } catch (error) {
@@ -85,6 +89,26 @@ for (const [name, value] of Object.entries({ notion, notionCollectionOptions, cr
   )
   if (manifestSchema.title !== 'TanStack DB Notion schema manifest') {
     throw new Error('Packed manifest JSON Schema is missing.')
+  }
+  try {
+    await access(
+      join(
+        temporaryRoot,
+        'node_modules',
+        'tanstack-db-notion-adapter',
+        'docs',
+        'SHIP_READINESS.md',
+      ),
+    )
+    throw new Error('The packed package contains the internal ship-readiness backlog.')
+  } catch (error) {
+    if (
+      !(error instanceof Error) ||
+      !('code' in error) ||
+      error.code !== 'ENOENT'
+    ) {
+      throw error
+    }
   }
 
   await writeFile(

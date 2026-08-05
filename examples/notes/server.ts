@@ -5,7 +5,7 @@ import {
   createNotionSyncHandler,
   resolveNotionDataSourceId,
 } from 'tanstack-db-notion-adapter/server'
-import { noteSchema } from './src/note-schema'
+import { noteSchema } from './src/note-schema.generated'
 
 loadEnv({ path: new URL('.env', import.meta.url), quiet: true })
 

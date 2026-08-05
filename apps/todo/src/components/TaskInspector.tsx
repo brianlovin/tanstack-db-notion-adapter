@@ -24,6 +24,11 @@ interface TaskInspectorProps {
   onDeleted: () => void;
 }
 
+const editorDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+});
+
 function contentLabel(status: string | undefined): string {
   switch (status) {
     case "saved-local":
@@ -49,9 +54,7 @@ function formatEditorDate(value: string): string {
   const date = value.slice(0, 10);
   if (date === localDate()) return "Today";
   if (date === tomorrowDate()) return "Tomorrow";
-  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
-    new Date(`${date}T12:00:00`),
-  );
+  return editorDateFormatter.format(new Date(`${date}T12:00:00`));
 }
 
 export function TaskInspector({

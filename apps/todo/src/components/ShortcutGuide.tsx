@@ -13,18 +13,27 @@ const shortcuts = [
   ["Search / travel", "/ or type"],
 ] as const;
 
-export default function ShortcutGuide({ open, onClose }: { open: boolean; onClose: () => void }) {
-  if (!open) return null;
+export default function ShortcutGuide({ onClose }: { onClose: () => void }) {
   return (
     <div className="palette-layer" role="presentation">
-      <button className="palette-scrim" onClick={onClose} aria-label="Close shortcuts" />
-      <section className="shortcut-guide" role="dialog" aria-modal="true" aria-label="Shortcuts">
+      <button
+        className="palette-scrim"
+        type="button"
+        onClick={onClose}
+        aria-label="Close shortcuts"
+      />
+      <dialog open className="shortcut-guide" aria-label="Shortcuts">
         <header>
           <div>
             <p className="eyebrow">Move at thought speed</p>
             <h2>Keyboard shortcuts</h2>
           </div>
-          <button className="shortcut-close" onClick={onClose} aria-label="Close shortcuts">
+          <button
+            className="shortcut-close"
+            type="button"
+            onClick={onClose}
+            aria-label="Close shortcuts"
+          >
             <X size={17} />
           </button>
         </header>
@@ -36,7 +45,7 @@ export default function ShortcutGuide({ open, onClose }: { open: boolean; onClos
             </div>
           ))}
         </div>
-      </section>
+      </dialog>
     </div>
   );
 }

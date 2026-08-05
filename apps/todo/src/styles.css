@@ -1010,7 +1010,10 @@ kbd {
 .shortcut-guide {
   position: relative;
   width: min(520px, calc(100vw - 28px));
+  margin: 0;
+  padding: 0;
   overflow: hidden;
+  color: inherit;
   background: white;
   border: 1px solid #dfe1e4;
   border-radius: 12px;

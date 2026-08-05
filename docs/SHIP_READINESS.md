@@ -236,7 +236,9 @@ lost response can silently lose an acknowledged edit or create a duplicate.
 
 ## Example applications
 
-Examples are acceptance tests for product workflows, not showcase-only demos.
+Examples are intentionally thin acceptance tests for product workflows. Their
+Notion-style interface uses a small type scale, neutral colors, and only the
+controls needed to exercise the adapter behavior under test.
 
 ### Todos (existing)
 
@@ -248,38 +250,9 @@ Examples are acceptance tests for product workflows, not showcase-only demos.
 
 ### Notes / journal (implemented proof of concept)
 
-Build a focused notes application with a left sidebar of entries and an
-editable content viewer. The visual direction will be calm and editorial: warm
-paper surfaces, ink-forward typography, one accent color for selection/focus,
-and a narrow, readable writing column. A small sync ledger beside the editor
-status is the signature interaction: it distinguishes **saved locally** from
-**synced to Notion** without interrupting writing.
-
-Design tokens are intentionally constrained to warm canvas `#F3EFE6`, paper
-`#FFFCF5`, ink `#25231F`, muted ink `#766F64`, sage accent `#66775B`, and rule
-`#D9D2C4`. The writing face is Iowan Old Style/Palatino and the interface face
-is Avenir Next/system sans; labels use the sans face rather than introducing a
-third decorative treatment. The one visually bold element is the selected
-note's sage edge and sync ledger—everything else stays quiet enough for long
-writing sessions.
-
-Desktop wireframe:
-
-```text
-┌──────────────────────┬─────────────────────────────────────────────┐
-│ Notes        [New]   │ Title                              Synced ✓ │
-│ Search…              │ 3 Aug 2026                                  │
-│                      │                                             │
-│ ● Field notes        │ A quiet, editable writing surface…          │
-│   Today, 10:42       │                                             │
-│   Release journal    │                                             │
-│   Yesterday          │                                             │
-└──────────────────────┴─────────────────────────────────────────────┘
-```
-
-On narrow screens the list and editor become separate views with a visible
-Back control. Both views remain keyboard navigable, focus-visible, and usable
-with reduced motion.
+The Notes example is a two-pane list and editor. It keeps the page-content
+lifecycle visible without adding application-specific navigation or styling.
+On narrow screens the panes become separate views with a Back control.
 
 - [x] Use Notion's enhanced-Markdown API in version `2026-03-11`, retaining the
   block API as a future fallback for unsupported block types.

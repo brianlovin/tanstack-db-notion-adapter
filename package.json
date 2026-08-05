@@ -4,20 +4,39 @@
   "description": "Offline-first, end-to-end typed TanStack DB collections backed by Notion data sources",
   "type": "module",
   "license": "MIT",
+  "sideEffects": false,
+  "keywords": [
+    "tanstack-db",
+    "notion",
+    "offline-first",
+    "sync",
+    "typescript"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "files": [
     "bin",
     "dist",
     "README.md",
     "LICENSE",
     "SECURITY.md",
-    "docs",
+    "docs/PROPERTY_SUPPORT.md",
+    "docs/architecture.md",
+    "docs/authentication.md",
+    "docs/errors-and-recovery.md",
+    "docs/idempotency-store.md",
+    "docs/large-datasets.md",
+    "docs/operations.md",
+    "docs/schema-workflow.md",
+    "docs/sync-invariants.md",
     "schema",
     "skills"
   ],
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "tanstack-db-notion": "./bin/tanstack-db-notion.js"
+    "tanstack-db-notion": "bin/tanstack-db-notion.js"
   },
   "exports": {
     ".": {
@@ -31,7 +50,8 @@
     "./schema-tools": {
       "types": "./dist/schema-tools.d.ts",
       "import": "./dist/schema-tools.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
@@ -49,6 +69,9 @@
     "test": "vitest run",
     "test:package": "npm run build && node scripts/package-smoke.mjs",
     "test:watch": "vitest",
+    "release:check": "npm run typecheck && npm test && npm run build:example && npm run test:package",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run release:check",
     "dev": "npm run build && concurrently -n api,web -c blue,magenta \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "tsx watch examples/todos/server.ts",
     "dev:web": "vite --config examples/todos/vite.config.ts",
@@ -75,6 +98,7 @@
     "dotenv": "^17.2.3",
     "fake-indexeddb": "^6.2.5",
     "hono": "^4.12.34",
+    "knip": "^6.31.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "tsx": "^4.23.5",

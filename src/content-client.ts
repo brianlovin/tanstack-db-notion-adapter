@@ -586,16 +586,17 @@ export function createNotionPageContentClient(
     flush,
     async flushAll() {
       await initialization
-      await Promise.all(
-        [...records.values()]
-          .filter(
-            (record) =>
-              record.pending &&
-              record.notionPageId !== null &&
-              record.status !== 'conflict',
-          )
-          .map((record) => flush(record.key)),
-      )
+      const flushes: Array<Promise<void>> = []
+      for (const record of records.values()) {
+        if (
+          record.pending &&
+          record.notionPageId !== null &&
+          record.status !== 'conflict'
+        ) {
+          flushes.push(flush(record.key))
+        }
+      }
+      await Promise.all(flushes)
     },
     async acceptRemote(key) {
       await initialization

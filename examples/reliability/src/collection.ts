@@ -15,7 +15,7 @@ export function isLabOnline() {
   return labOnline
 }
 
-export const reliabilityStorage = createBrowserNotionStorage({
+const reliabilityStorage = createBrowserNotionStorage({
   databaseName: 'tanstack-db-notion-reliability-lab',
 })
 

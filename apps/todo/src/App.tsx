@@ -63,6 +63,13 @@ function editorFieldSelector(focus: "deadline" | "title" | "when"): string {
   }
 }
 
+function focusTaskRow(id: string | null): void {
+  if (!id) return;
+  requestAnimationFrame(() => {
+    document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(id)}"]`)?.focus();
+  });
+}
+
 function nextTaskOutsideSelection(
   todos: ReadonlyArray<Todo>,
   selectedIds: ReadonlySet<string>,
@@ -83,6 +90,8 @@ function Login({ onLogin }: { onLogin: (password: string) => Promise<void> }) {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const passwordInput = useRef<HTMLInputElement>(null);
+  useEffect(() => passwordInput.current?.focus(), []);
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
@@ -108,14 +117,14 @@ function Login({ onLogin }: { onLogin: (password: string) => Promise<void> }) {
           <label>
             Password
             <input
-              autoFocus
+              ref={passwordInput}
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
           </label>
           {error && <p className="login-error">{error}</p>}
-          <button disabled={submitting || !password}>
+          <button type="submit" disabled={submitting || !password}>
             <LockKeyhole size={16} />
             {submitting ? "Unlocking…" : "Unlock workspace"}
           </button>
@@ -190,12 +199,6 @@ function Workspace({
     );
   };
 
-  const focusTaskRow = (id: string | null) => {
-    if (!id) return;
-    requestAnimationFrame(() => {
-      document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(id)}"]`)?.focus();
-    });
-  };
   const closeEditor = (restoreFocus = true) => {
     const id = editingId;
     if (!id) return;
@@ -427,7 +430,12 @@ function Workspace({
           {developmentBypass ? (
             <span className="top-bar-spacer" />
           ) : (
-            <button className="top-control" onClick={onLogout} aria-label="Lock workspace">
+            <button
+              className="top-control"
+              type="button"
+              onClick={onLogout}
+              aria-label="Lock workspace"
+            >
               <LockKeyhole />
             </button>
           )}
@@ -442,6 +450,7 @@ function Workspace({
                 return (
                   <button
                     key={destination.id}
+                    type="button"
                     className={destination.id === view ? "is-active" : undefined}
                     onClick={() => changeView(destination.id)}
                   >
@@ -455,6 +464,7 @@ function Workspace({
           </details>
           <button
             className={`top-control top-sync status-${sync.status}`}
+            type="button"
             onClick={() => void workspace.collection.utils.syncNow()}
             aria-label={sync.error ? `Sync error: ${sync.error}` : `Notion sync: ${sync.status}`}
           >
@@ -475,7 +485,9 @@ function Workspace({
         {sync.error && (
           <div className="sync-error-banner">
             <span>{sync.error}</span>
-            <button onClick={() => void workspace.collection.utils.syncNow()}>Try again</button>
+            <button type="button" onClick={() => void workspace.collection.utils.syncNow()}>
+              Try again
+            </button>
           </div>
         )}
 
@@ -550,7 +562,6 @@ function Workspace({
       {palette.open && (
         <Suspense fallback={null}>
           <CommandPalette
-            open
             query={palette.query}
             todos={allTodos}
             onQuery={(query) => setPalette({ open: true, query })}
@@ -565,7 +576,7 @@ function Workspace({
       )}
       {shortcutsOpen && (
         <Suspense fallback={null}>
-          <ShortcutGuide open onClose={() => setShortcutsOpen(false)} />
+          <ShortcutGuide onClose={() => setShortcutsOpen(false)} />
         </Suspense>
       )}
     </main>

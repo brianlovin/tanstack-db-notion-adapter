@@ -3,16 +3,14 @@ import {
   createBrowserNotionStorage,
   notionCollectionOptions,
   type LegacyNotionPersistedState,
-  type NotionPersistedState,
 } from 'tanstack-db-notion-adapter'
 import {
   incidentCollection,
-  reliabilityStorage,
   setLabOnline,
 } from './collection'
 import { reliabilitySchema, type Incident } from './reliability-schema'
 
-export interface LabState {
+interface LabState {
   rows: Array<Incident>
   telemetry: {
     mutationRequests: number
@@ -63,7 +61,7 @@ async function waitFor<T>(
   return latest
 }
 
-export async function fetchLabState(): Promise<LabState> {
+async function fetchLabState(): Promise<LabState> {
   const response = await fetch('/api/lab/state')
   if (!response.ok) throw new Error('Could not read the fixture server state.')
   return response.json() as Promise<LabState>
@@ -314,13 +312,4 @@ export async function runConflictScenario(): Promise<ScenarioReport> {
       'Overlapping title edit returned property_conflict',
     ],
   }
-}
-
-export async function inspectPersistedState(): Promise<
-  NotionPersistedState<Incident> | null
-> {
-  const state = await reliabilityStorage.load<Incident>(
-    'notion-reliability-incidents',
-  )
-  return state?.version === 2 ? state : null
 }

@@ -1,0 +1,32 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "ignoreExportsUsedInFile": {
+    "interface": true,
+    "type": true
+  },
+  "workspaces": {
+    ".": {
+      "entry": [
+        "src/index.ts",
+        "src/server.ts",
+        "src/schema-tools.ts",
+        "src/cli.ts",
+        "scripts/*.mjs",
+        "skills/tanstack-db-notion/scripts/*.mjs",
+        "examples/*/src/main.tsx",
+        "examples/*/server.ts",
+        "examples/*/vite.config.ts"
+      ],
+      "project": [
+        "src/**/*.ts",
+        "tests/**/*.ts",
+        "scripts/*.mjs",
+        "skills/tanstack-db-notion/scripts/*.mjs",
+        "examples/**/*.{ts,tsx}"
+      ]
+    },
+    "apps/todo": {
+      "project": ["src/**/*.{ts,tsx}", "server/**/*.ts", "*.ts"]
+    }
+  }
+}

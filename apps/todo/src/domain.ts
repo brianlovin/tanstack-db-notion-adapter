@@ -1,5 +1,19 @@
 import type { TodoSchemaRow } from "./todo-schema.generated";
 
+const monthYearFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "long",
+  year: "numeric",
+});
+const longDateFormatter = new Intl.DateTimeFormat(undefined, {
+  weekday: "long",
+  month: "long",
+  day: "numeric",
+});
+const shortDateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+});
+
 export type Todo = TodoSchemaRow;
 export type TodoView = "inbox" | "today" | "upcoming" | "anytime" | "someday" | "logbook" | "all";
 
@@ -34,7 +48,7 @@ export function dateOnly(value: string | null): string | null {
   return value ? value.slice(0, 10) : null;
 }
 
-export function effectiveList(todo: Todo): "Inbox" | "Anytime" | "Someday" {
+function effectiveList(todo: Todo): "Inbox" | "Anytime" | "Someday" {
   return todo.list ?? "Inbox";
 }
 
@@ -58,7 +72,7 @@ export function taskMatchesView(todo: Todo, view: TodoView, today = localDate())
   }
 }
 
-export function sortTasks(todos: ReadonlyArray<Todo>, view: TodoView): Array<Todo> {
+function sortTasks(todos: ReadonlyArray<Todo>, view: TodoView): Array<Todo> {
   return [...todos].sort((left, right) => {
     if (view === "logbook") {
       return (right.completedAt ?? right.updatedAt).localeCompare(
@@ -123,10 +137,7 @@ export interface QuickTaskDraft {
   priority: "Low" | "Medium" | "High";
 }
 
-export function draftDefaultsForView(
-  view: TodoView,
-  now = new Date(),
-): Omit<QuickTaskDraft, "title"> {
+function draftDefaultsForView(view: TodoView, now = new Date()): Omit<QuickTaskDraft, "title"> {
   switch (view) {
     case "today":
       return { list: "Anytime", scheduledFor: localDate(now), priority: "Medium" };
@@ -179,7 +190,7 @@ export function parseQuickTask(
   return { title, list, scheduledFor, priority };
 }
 
-export function nextPosition(todos: ReadonlyArray<Todo>): number {
+function nextPosition(todos: ReadonlyArray<Todo>): number {
   return todos.reduce((maximum, todo) => Math.max(maximum, todo.position ?? 0), 0) + 1_000;
 }
 
@@ -264,27 +275,17 @@ export function groupLabel(todo: Todo, view: TodoView, today = localDate()): str
   if (view === "upcoming") return formatLongDate(todo.scheduledFor);
   if (view === "logbook") {
     const date = new Date(todo.completedAt ?? todo.updatedAt);
-    return new Intl.DateTimeFormat(undefined, {
-      month: "long",
-      year: "numeric",
-    }).format(date);
+    return monthYearFormatter.format(date);
   }
   return "Tasks";
 }
 
-export function formatLongDate(value: string | null): string {
+function formatLongDate(value: string | null): string {
   if (!value) return "No date";
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: "long",
-    month: "long",
-    day: "numeric",
-  }).format(new Date(`${value.slice(0, 10)}T12:00:00`));
+  return longDateFormatter.format(new Date(`${value.slice(0, 10)}T12:00:00`));
 }
 
 export function formatShortDate(value: string | null): string {
   if (!value) return "";
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-  }).format(new Date(`${value.slice(0, 10)}T12:00:00`));
+  return shortDateFormatter.format(new Date(`${value.slice(0, 10)}T12:00:00`));
 }

@@ -1088,9 +1088,10 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
 
           const controller = new AbortController()
           let timedOut = false
-          const handleAbort = () => controller.abort(init.signal?.reason)
-          if (init.signal?.aborted) handleAbort()
-          else init.signal?.addEventListener('abort', handleAbort, { once: true })
+          const requestSignal = init.signal
+          const handleAbort = () => controller.abort(requestSignal?.reason)
+          if (requestSignal?.aborted) handleAbort()
+          else requestSignal?.addEventListener('abort', handleAbort, { once: true })
           const timeout = setTimeout(() => {
             timedOut = true
             controller.abort(new Error('Notion request timed out.'))
@@ -1123,7 +1124,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
             throw error
           } finally {
             clearTimeout(timeout)
-            init.signal?.removeEventListener('abort', handleAbort)
+            requestSignal?.removeEventListener('abort', handleAbort)
           }
           const body = (await response.json().catch(() => ({}))) as
             | T
@@ -1376,9 +1377,9 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
       body.sorts = structuredClone(fixedSorts)
     }
     const response = await queryPages(body, signal)
-    const pages = (response.results ?? [])
-      .filter(isPage)
-      .filter((page) => page.in_trash !== true)
+    const pages = (response.results ?? []).filter(
+      (page): page is NotionPageLike => isPage(page) && page.in_trash !== true,
+    )
     const rows: Array<TItem> = []
     for (const sourcePage of pages) {
       const page = structuredClone(sourcePage)

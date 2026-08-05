@@ -2,6 +2,7 @@ import { forwardRef, useEffect, useState, type FormEvent } from "react";
 import { ArrowUp, Check, X } from "lucide-react";
 import type { TodoCollection } from "../collection";
 import { parseQuickTask, type TodoView } from "../domain";
+import type { TodoSchemaInput } from "../todo-schema.generated";
 
 interface QuickEntryProps {
   collection: TodoCollection;
@@ -29,14 +30,15 @@ export const QuickEntry = forwardRef<HTMLInputElement, QuickEntryProps>(function
     const draft = parseQuickTask(value, view);
     if (!draft) return;
     const id = crypto.randomUUID();
-    collection.insert({
+    const input: TodoSchemaInput = {
       ...draft,
       id,
       position,
       completed: false,
       completedAt: null,
       deadline: null,
-    });
+    };
+    collection.insert(input);
     setValue("");
     onCreated(id);
   };

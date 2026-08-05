@@ -7,7 +7,6 @@ type PaletteResult =
   | { id: string; kind: "view"; label: string; view: TodoView; travelKey: string };
 
 interface CommandPaletteProps {
-  open: boolean;
   query: string;
   todos: ReadonlyArray<Todo>;
   onQuery: (query: string) => void;
@@ -23,7 +22,6 @@ function ResultIcon({ result }: { result: PaletteResult }) {
 }
 
 export default function CommandPalette({
-  open,
   query,
   todos,
   onQuery,
@@ -35,35 +33,38 @@ export default function CommandPalette({
   const [activeIndex, setActiveIndex] = useState(0);
   const results = useMemo<Array<PaletteResult>>(() => {
     const normalized = query.trim().toLocaleLowerCase();
-    const viewResults = views
-      .filter((view) => !normalized || view.label.toLocaleLowerCase().includes(normalized))
-      .map((view) => ({
-        id: `view:${view.id}`,
-        kind: "view" as const,
-        label: view.label,
-        view: view.id,
-        travelKey: view.travelKey,
-      }));
-    const taskResults = todos
-      .filter((todo) => normalized && todo.title.toLocaleLowerCase().includes(normalized))
-      .slice(0, 12)
-      .map((todo) => ({
-        id: `task:${todo.id}`,
-        kind: "task" as const,
-        label: todo.title,
-        todo,
-      }));
+    const viewResults: Array<PaletteResult> = [];
+    for (const view of views) {
+      if (!normalized || view.label.toLocaleLowerCase().includes(normalized)) {
+        viewResults.push({
+          id: `view:${view.id}`,
+          kind: "view" as const,
+          label: view.label,
+          view: view.id,
+          travelKey: view.travelKey,
+        });
+      }
+    }
+    const taskResults: Array<PaletteResult> = [];
+    if (normalized) {
+      for (const todo of todos) {
+        if (!todo.title.toLocaleLowerCase().includes(normalized)) continue;
+        taskResults.push({
+          id: `task:${todo.id}`,
+          kind: "task" as const,
+          label: todo.title,
+          todo,
+        });
+        if (taskResults.length === 12) break;
+      }
+    }
     return [...viewResults, ...taskResults];
   }, [query, todos]);
 
   useEffect(() => {
-    if (!open) return;
-    setActiveIndex(0);
     requestAnimationFrame(() => input.current?.focus());
-  }, [open]);
-  useEffect(() => setActiveIndex(0), [query]);
+  }, []);
 
-  if (!open) return null;
   const choose = (result: PaletteResult | undefined) => {
     if (!result) return;
     if (result.kind === "view") onView(result.view);
@@ -73,8 +74,8 @@ export default function CommandPalette({
 
   return (
     <div className="palette-layer" role="presentation">
-      <button className="palette-scrim" onClick={onClose} aria-label="Close search" />
-      <section className="command-palette" role="dialog" aria-modal="true" aria-label="Search">
+      <button className="palette-scrim" type="button" onClick={onClose} aria-label="Close search" />
+      <dialog open className="command-palette" aria-label="Search">
         <label className="palette-input">
           <Search size={18} />
           <span className="sr-only">Search tasks and lists</span>
@@ -82,7 +83,10 @@ export default function CommandPalette({
             ref={input}
             data-search-input
             value={query}
-            onChange={(event) => onQuery(event.target.value)}
+            onChange={(event) => {
+              setActiveIndex(0);
+              onQuery(event.target.value);
+            }}
             onKeyDown={(event) => {
               if (event.key === "ArrowDown") {
                 event.preventDefault();
@@ -107,6 +111,7 @@ export default function CommandPalette({
           {results.map((result, index) => (
             <button
               key={result.id}
+              type="button"
               className={index === activeIndex ? "palette-result is-active" : "palette-result"}
               onMouseEnter={() => setActiveIndex(index)}
               onClick={() => choose(result)}
@@ -133,7 +138,7 @@ export default function CommandPalette({
           </span>
           <span>Start typing anywhere to search</span>
         </footer>
-      </section>
+      </dialog>
     </div>
   );
 }

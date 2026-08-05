@@ -126,13 +126,12 @@ export function TaskList({
     while (next >= 0 && next < items.length) {
       const item = items[next];
       if (item?.type === "task") {
-        if (extend) onExtendSelection(item.todo.id);
-        else onSelect(item.todo.id);
+        const todoId = item.todo.id;
+        if (extend) onExtendSelection(todoId);
+        else onSelect(todoId);
         virtualizer.scrollToIndex(next, { align: "auto" });
         requestAnimationFrame(() => {
-          document
-            .querySelector<HTMLElement>(`[data-task-id="${CSS.escape(item.todo.id)}"]`)
-            ?.focus();
+          document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(todoId)}"]`)?.focus();
         });
         return;
       }
