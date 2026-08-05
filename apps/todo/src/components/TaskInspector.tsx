@@ -1,16 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Calendar,
   Check,
-  ChevronLeft,
   CircleAlert,
   ExternalLink,
   Flag,
-  Inbox,
-  ListChecks,
+  ListTodo,
+  MoreHorizontal,
   RefreshCw,
   Trash2,
-  X,
 } from "lucide-react";
 import type { TodoWorkspace } from "../collection";
 import { localDate, tomorrowDate, type Todo } from "../domain";
@@ -19,7 +17,10 @@ import { useTaskContent } from "../hooks";
 interface TaskInspectorProps {
   workspace: TodoWorkspace;
   todo: Todo;
-  onClose: () => void;
+  focusField?: "deadline" | "title" | "when";
+  completing: boolean;
+  closing: boolean;
+  onToggleComplete: () => void;
   onDeleted: () => void;
 }
 
@@ -44,15 +45,50 @@ function contentLabel(status: string | undefined): string {
   }
 }
 
-export function TaskInspector({ workspace, todo, onClose, onDeleted }: TaskInspectorProps) {
+function formatEditorDate(value: string): string {
+  const date = value.slice(0, 10);
+  if (date === localDate()) return "Today";
+  if (date === tomorrowDate()) return "Tomorrow";
+  return new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
+    new Date(`${date}T12:00:00`),
+  );
+}
+
+export function TaskInspector({
+  workspace,
+  todo,
+  focusField = "title",
+  completing,
+  closing,
+  onToggleComplete,
+  onDeleted,
+}: TaskInspectorProps) {
   const [title, setTitle] = useState(todo.title);
   const [notes, setNotes] = useState("");
   const [notesError, setNotesError] = useState<string | null>(null);
   const [contentLoadAttempt, setContentLoadAttempt] = useState(0);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const titleInput = useRef<HTMLTextAreaElement>(null);
+  const whenInput = useRef<HTMLInputElement>(null);
+  const deadlineInput = useRef<HTMLInputElement>(null);
   const content = useTaskContent(workspace, todo.id);
 
   useEffect(() => setTitle(todo.title), [todo.id, todo.title]);
+  useEffect(() => {
+    let target: HTMLInputElement | HTMLTextAreaElement | null;
+    switch (focusField) {
+      case "when":
+        target = whenInput.current;
+        break;
+      case "deadline":
+        target = deadlineInput.current;
+        break;
+      case "title":
+        target = titleInput.current;
+        break;
+    }
+    requestAnimationFrame(() => target?.focus());
+  }, [focusField, todo.id]);
   useEffect(() => {
     let active = true;
     const prepare = async () => {
@@ -109,142 +145,40 @@ export function TaskInspector({ workspace, todo, onClose, onDeleted }: TaskInspe
   };
 
   return (
-    <aside className="inspector" aria-label={`Details for ${todo.title}`}>
-      <header className="inspector-header">
-        <button
-          className="icon-control mobile-back"
-          onClick={onClose}
-          aria-label="Back to task list"
-        >
-          <ChevronLeft />
-        </button>
-        <span className="inspector-kicker">Task</span>
-        <div className="inspector-actions">
-          {todo.notionUrl && (
-            <a
-              className="icon-control"
-              href={todo.notionUrl}
-              target="_blank"
-              rel="noreferrer"
-              aria-label="Open in Notion"
-            >
-              <ExternalLink />
-            </a>
-          )}
-          <button className="icon-control" onClick={onClose} aria-label="Close task details">
-            <X />
-          </button>
-        </div>
-      </header>
-
-      <div className="inspector-scroll">
+    <article
+      className={closing ? "task-editor is-closing" : "task-editor"}
+      data-task-editor={todo.id}
+      aria-label={`Details for ${todo.title}`}
+    >
+      <div className="task-editor-body">
         <div className="title-editor">
           <button
-            className={todo.completed ? "large-check is-checked" : "large-check"}
-            onClick={() =>
-              workspace.collection.update(todo.id, (draft) => {
-                draft.completed = !todo.completed;
-                draft.completedAt = todo.completed ? null : new Date().toISOString();
-              })
-            }
+            className={todo.completed || completing ? "large-check is-checked" : "large-check"}
+            onClick={onToggleComplete}
+            disabled={completing}
             aria-label={todo.completed ? "Mark incomplete" : "Complete task"}
           >
-            {todo.completed && <Check size={15} strokeWidth={3} />}
+            {(todo.completed || completing) && <Check size={15} strokeWidth={3} />}
           </button>
           <textarea
+            ref={titleInput}
+            data-task-title
             value={title}
             onChange={(event) => setTitle(event.target.value)}
             onBlur={saveTitle}
             onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
+              if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) {
                 event.preventDefault();
                 saveTitle();
                 event.currentTarget.blur();
               }
             }}
-            rows={2}
+            rows={1}
             aria-label="Task title"
           />
         </div>
 
-        <section className="inspector-section properties-grid" aria-label="Task properties">
-          <label>
-            <span>
-              <Inbox size={15} />
-              List
-            </span>
-            <select
-              value={todo.list ?? "Inbox"}
-              onChange={(event) =>
-                workspace.collection.update(todo.id, (draft) => {
-                  draft.list = event.target.value as Todo["list"];
-                  if (draft.list === "Someday") draft.scheduledFor = null;
-                })
-              }
-            >
-              <option>Inbox</option>
-              <option>Anytime</option>
-              <option>Someday</option>
-            </select>
-          </label>
-          <label>
-            <span>
-              <Calendar size={15} />
-              When
-            </span>
-            <input
-              type="date"
-              value={todo.scheduledFor?.slice(0, 10) ?? ""}
-              onChange={(event) => updateDate("scheduledFor", event.target.value || null)}
-            />
-          </label>
-          <label>
-            <span>
-              <CircleAlert size={15} />
-              Deadline
-            </span>
-            <input
-              type="date"
-              value={todo.deadline?.slice(0, 10) ?? ""}
-              onChange={(event) => updateDate("deadline", event.target.value || null)}
-            />
-          </label>
-          <label>
-            <span>
-              <Flag size={15} />
-              Priority
-            </span>
-            <select
-              value={todo.priority ?? "Medium"}
-              onChange={(event) =>
-                workspace.collection.update(todo.id, (draft) => {
-                  draft.priority = event.target.value as Todo["priority"];
-                })
-              }
-            >
-              <option>Low</option>
-              <option>Medium</option>
-              <option>High</option>
-            </select>
-          </label>
-        </section>
-
-        <div className="date-shortcuts" aria-label="Schedule shortcuts">
-          <button onClick={() => updateDate("scheduledFor", localDate())}>Today</button>
-          <button onClick={() => updateDate("scheduledFor", tomorrowDate())}>Tomorrow</button>
-          <button onClick={() => updateDate("scheduledFor", null)}>No date</button>
-        </div>
-
         <section className="notes-section">
-          <div className="section-heading">
-            <span>
-              <ListChecks size={16} />
-              Notes
-            </span>
-            <small className={`content-status status-${content?.status ?? "idle"}`}>
-              {contentLabel(content?.status)}
-            </small>
-          </div>
           {content?.truncated || content?.unknownBlockIds.length ? (
             <div className="content-warning">
               <CircleAlert size={17} />
@@ -258,7 +192,7 @@ export function TaskInspector({ workspace, todo, onClose, onDeleted }: TaskInspe
               className="notes-editor"
               value={notes}
               onChange={(event) => updateNotes(event.target.value)}
-              placeholder="Add context, links, or the next step…"
+              placeholder="Notes"
               aria-label="Task notes"
             />
           )}
@@ -286,35 +220,116 @@ export function TaskInspector({ workspace, todo, onClose, onDeleted }: TaskInspe
           )}
         </section>
 
-        <footer className="inspector-footer">
-          <span>{todo.notionPageId ? "Connected to Notion" : "Waiting to create Notion page"}</span>
-          {!confirmDelete ? (
-            <button className="danger-text" onClick={() => setConfirmDelete(true)}>
-              <Trash2 size={14} />
-              Delete
-            </button>
-          ) : (
-            <span className="delete-confirm">
-              <button onClick={() => setConfirmDelete(false)}>Cancel</button>
-              <button
-                className="danger-fill"
-                onClick={() => {
-                  workspace.collection.delete(todo.id);
-                  onDeleted();
-                }}
+        <footer className="task-editor-controls" aria-label="Task properties">
+          <label className={todo.scheduledFor ? "schedule-control has-value" : "schedule-control"}>
+            <Calendar size={15} />
+            <span>{todo.scheduledFor ? formatEditorDate(todo.scheduledFor) : "When"}</span>
+            <input
+              ref={whenInput}
+              data-task-when
+              aria-label="When"
+              type="date"
+              value={todo.scheduledFor?.slice(0, 10) ?? ""}
+              onChange={(event) => updateDate("scheduledFor", event.target.value || null)}
+            />
+          </label>
+          <div className="editor-property-actions">
+            <label className="editor-icon-property" title={`List: ${todo.list ?? "Inbox"}`}>
+              <ListTodo />
+              <span className="sr-only">List</span>
+              <select
+                aria-label="List"
+                value={todo.list ?? "Inbox"}
+                onChange={(event) =>
+                  workspace.collection.update(todo.id, (draft) => {
+                    draft.list = event.target.value as Todo["list"];
+                    if (draft.list === "Someday") draft.scheduledFor = null;
+                  })
+                }
               >
-                Delete task
-              </button>
-            </span>
-          )}
+                <option>Inbox</option>
+                <option>Anytime</option>
+                <option>Someday</option>
+              </select>
+            </label>
+            <label
+              className={todo.deadline ? "editor-icon-property has-value" : "editor-icon-property"}
+              title={
+                todo.deadline ? `Deadline: ${formatEditorDate(todo.deadline)}` : "Set deadline"
+              }
+            >
+              <Flag />
+              <span className="sr-only">Deadline</span>
+              <input
+                ref={deadlineInput}
+                data-task-deadline
+                aria-label="Deadline"
+                type="date"
+                value={todo.deadline?.slice(0, 10) ?? ""}
+                onChange={(event) => updateDate("deadline", event.target.value || null)}
+              />
+            </label>
+            <details className="editor-more">
+              <summary aria-label="More task actions" title="More task actions">
+                <MoreHorizontal />
+              </summary>
+              <div className="editor-more-menu">
+                <label className="editor-more-select">
+                  <Flag />
+                  <span>Priority</span>
+                  <select
+                    aria-label="Priority"
+                    value={todo.priority ?? "Medium"}
+                    onChange={(event) =>
+                      workspace.collection.update(todo.id, (draft) => {
+                        draft.priority = event.target.value as Todo["priority"];
+                      })
+                    }
+                  >
+                    <option>Low</option>
+                    <option>Medium</option>
+                    <option>High</option>
+                  </select>
+                </label>
+                {todo.notionUrl && (
+                  <a href={todo.notionUrl} target="_blank" rel="noreferrer">
+                    <ExternalLink /> Open in Notion
+                  </a>
+                )}
+                {content?.pending && (
+                  <button onClick={() => void workspace.content.flush(todo.id)}>
+                    <RefreshCw /> Save now
+                  </button>
+                )}
+                {!confirmDelete ? (
+                  <button className="danger-text" onClick={() => setConfirmDelete(true)}>
+                    <Trash2 /> Delete
+                  </button>
+                ) : (
+                  <>
+                    <button onClick={() => setConfirmDelete(false)}>Cancel</button>
+                    <button
+                      className="danger-text"
+                      onClick={() => {
+                        workspace.collection.delete(todo.id);
+                        onDeleted();
+                      }}
+                    >
+                      <Trash2 /> Confirm delete
+                    </button>
+                  </>
+                )}
+              </div>
+            </details>
+          </div>
+          <small
+            className={`sr-only content-status status-${content?.status ?? "idle"}`}
+            aria-live="polite"
+          >
+            {contentLabel(content?.status)}
+          </small>
         </footer>
       </div>
-      {content?.pending && (
-        <button className="flush-button" onClick={() => void workspace.content.flush(todo.id)}>
-          <RefreshCw size={14} />
-          Save now
-        </button>
-      )}
-    </aside>
+    </article>
   );
 }

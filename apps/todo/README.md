@@ -18,7 +18,7 @@ read-heavy publishing cache.
 - Quick entry tokens: `@today`, `@tomorrow`, `@inbox`, `@anytime`, `@someday`,
   and `!high` / `!medium` / `!low`.
 - A virtualized task list designed to stay responsive across thousands of rows.
-- Lazy, durable page-body notes with a 750 ms remote debounce.
+- Lazy, durable page-body notes with an 800 ms remote debounce.
 - Offline PWA shell, cached collection hydration, reload-safe outbox recovery,
   and explicit sync/error state.
 - Password/session auth, same-origin writes, a durable SQLite idempotency ledger,
@@ -82,13 +82,26 @@ npm run build
 ```
 
 The dev server runs the Hono API as middleware at
-[http://localhost:5174](http://localhost:5174). Keyboard shortcuts:
+[http://localhost:5174](http://localhost:5174). Click a task to select it;
+double-click it or press `Return` to open its details. Keyboard shortcuts:
 
-- `Command/Ctrl N`: new task
-- `Command/Ctrl K`: focus quick entry
-- `Command/Ctrl 1` through `Command/Ctrl 7`: switch views
-- Up/Down: move the selected task
-- Escape: close quick entry, inspector, or mobile navigation
+- `Space`: create a task below the selection, or at the top when nothing is
+  selected
+- `Up` / `Down`: change the selected task; hold `Shift` to extend the selection
+- `Option/Alt Up` / `Down`: reorder the focused task
+- `Return`: open the selection; `Command/Ctrl Return` closes the editor
+- `Shift Return`: complete the selection
+- `Shift S`: schedule the selection; `Shift D`: set its deadline
+- `/` or ordinary typing: search tasks and jump between lists
+- `G`, then `I/T/U/A/S/L/E`: open Inbox, Today, Upcoming, Anytime, Someday,
+  Logbook, or All tasks
+- `?`: show the in-app shortcut guide
+- `Escape`: close the active palette, editor, composer, or mobile navigation
+
+The app deliberately uses browser-safe keys instead of copying native app
+shortcuts such as `Command N`, `Command T`, or `Command 1`. Browsers reserve
+those combinations, so they cannot form a reliable web-app interaction
+contract.
 
 ## Run the production server
 

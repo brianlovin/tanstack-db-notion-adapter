@@ -50,7 +50,14 @@ describe("TaskInspector", () => {
       },
     } as unknown as TodoWorkspace;
     render(
-      <TaskInspector workspace={workspace} todo={todo} onClose={vi.fn()} onDeleted={vi.fn()} />,
+      <TaskInspector
+        workspace={workspace}
+        todo={todo}
+        completing={false}
+        closing={false}
+        onToggleComplete={vi.fn()}
+        onDeleted={vi.fn()}
+      />,
     );
 
     snapshot = {

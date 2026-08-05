@@ -6,15 +6,15 @@ export type TodoView = "inbox" | "today" | "upcoming" | "anytime" | "someday" | 
 export const views: ReadonlyArray<{
   id: TodoView;
   label: string;
-  shortcut?: string;
+  travelKey: string;
 }> = [
-  { id: "inbox", label: "Inbox", shortcut: "2" },
-  { id: "today", label: "Today", shortcut: "1" },
-  { id: "upcoming", label: "Upcoming", shortcut: "3" },
-  { id: "anytime", label: "Anytime", shortcut: "4" },
-  { id: "someday", label: "Someday", shortcut: "5" },
-  { id: "logbook", label: "Logbook" },
-  { id: "all", label: "All tasks" },
+  { id: "inbox", label: "Inbox", travelKey: "I" },
+  { id: "today", label: "Today", travelKey: "T" },
+  { id: "upcoming", label: "Upcoming", travelKey: "U" },
+  { id: "anytime", label: "Anytime", travelKey: "A" },
+  { id: "someday", label: "Someday", travelKey: "S" },
+  { id: "logbook", label: "Logbook", travelKey: "L" },
+  { id: "all", label: "All tasks", travelKey: "E" },
 ];
 
 export function localDate(date = new Date()): string {
@@ -103,6 +103,19 @@ export function taskCounts(
   ) as Record<TodoView, number>;
 }
 
+export function selectionRange(
+  orderedIds: ReadonlyArray<string>,
+  anchorId: string,
+  focusId: string,
+): Set<string> {
+  const anchor = orderedIds.indexOf(anchorId);
+  const focus = orderedIds.indexOf(focusId);
+  if (anchor === -1 || focus === -1) return new Set([focusId]);
+  const start = Math.min(anchor, focus);
+  const end = Math.max(anchor, focus);
+  return new Set(orderedIds.slice(start, end + 1));
+}
+
 export interface QuickTaskDraft {
   title: string;
   list: "Inbox" | "Anytime" | "Someday";
@@ -168,6 +181,79 @@ export function parseQuickTask(
 
 export function nextPosition(todos: ReadonlyArray<Todo>): number {
   return todos.reduce((maximum, todo) => Math.max(maximum, todo.position ?? 0), 0) + 1_000;
+}
+
+function byPosition(left: Todo, right: Todo): number {
+  const difference = (left.position ?? 0) - (right.position ?? 0);
+  return difference || left.createdAt.localeCompare(right.createdAt);
+}
+
+export function positionAfter(todos: ReadonlyArray<Todo>, afterId: string | null): number {
+  const ordered = [...todos].sort(byPosition);
+  if (ordered.length === 0) return 1_000;
+  if (!afterId) return (ordered[0]?.position ?? 0) - 1_000;
+
+  const index = ordered.findIndex((todo) => todo.id === afterId);
+  if (index === -1) return nextPosition(todos);
+  const current = ordered[index]?.position ?? 0;
+  const next = ordered[index + 1]?.position;
+  return next == null ? current + 1_000 : current + (next - current) / 2;
+}
+
+export function positionForMove(
+  todos: ReadonlyArray<Todo>,
+  id: string,
+  direction: -1 | 1,
+): number | null {
+  const ordered = [...todos].sort(byPosition);
+  const index = ordered.findIndex((todo) => todo.id === id);
+  const destination = index + direction;
+  if (index === -1 || destination < 0 || destination >= ordered.length) return null;
+
+  if (direction === -1) {
+    const before = ordered[destination - 1]?.position;
+    const neighbor = ordered[destination]?.position ?? 0;
+    return before == null ? neighbor - 1_000 : before + (neighbor - before) / 2;
+  }
+
+  const neighbor = ordered[destination]?.position ?? 0;
+  const after = ordered[destination + 1]?.position;
+  return after == null ? neighbor + 1_000 : neighbor + (after - neighbor) / 2;
+}
+
+export function positionsForBlockMove(
+  todos: ReadonlyArray<Todo>,
+  selectedIds: ReadonlySet<string>,
+  direction: -1 | 1,
+): Map<string, number> {
+  const ordered = [...todos].sort(byPosition);
+  const block = ordered.filter((todo) => selectedIds.has(todo.id));
+  if (block.length === 0) return new Map();
+
+  const first = ordered.findIndex((todo) => todo.id === block[0]?.id);
+  const last = ordered.findIndex((todo) => todo.id === block.at(-1)?.id);
+  const boundary = direction === -1 ? first - 1 : last + 1;
+  if (boundary < 0 || boundary >= ordered.length) return new Map();
+
+  const lower =
+    direction === -1 ? ordered[first - 2]?.position : (ordered[last + 1]?.position ?? 0);
+  const upper =
+    direction === -1 ? (ordered[first - 1]?.position ?? 0) : ordered[last + 2]?.position;
+  const result = new Map<string, number>();
+
+  if (lower == null) {
+    const firstPosition = (upper ?? 0) - block.length * 1_000;
+    block.forEach((todo, index) => result.set(todo.id, firstPosition + index * 1_000));
+    return result;
+  }
+  if (upper == null) {
+    block.forEach((todo, index) => result.set(todo.id, lower + (index + 1) * 1_000));
+    return result;
+  }
+
+  const step = (upper - lower) / (block.length + 1);
+  block.forEach((todo, index) => result.set(todo.id, lower + step * (index + 1)));
+  return result;
 }
 
 export function groupLabel(todo: Todo, view: TodoView, today = localDate()): string {

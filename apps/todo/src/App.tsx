@@ -1,17 +1,82 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useLiveQuery } from "@tanstack/react-db";
-import { CloudOff, LockKeyhole, Menu, RotateCw, Sun } from "lucide-react";
+import {
+  Archive,
+  CalendarDays,
+  CheckCircle2,
+  ChevronsUpDown,
+  Cloud,
+  CloudOff,
+  Inbox,
+  Layers3,
+  ListTodo,
+  LockKeyhole,
+  Star,
+  Sun,
+} from "lucide-react";
 import { createTodoWorkspace, type TodoWorkspace } from "./collection";
-import { QuickEntry } from "./components/QuickEntry";
-import { Sidebar } from "./components/Sidebar";
-import { TaskInspector } from "./components/TaskInspector";
 import { TaskList } from "./components/TaskList";
-import { taskCounts, views, visibleTasks, type TodoView } from "./domain";
+import {
+  positionsForBlockMove,
+  selectionRange,
+  taskCounts,
+  views,
+  visibleTasks,
+  type Todo,
+  type TodoView,
+} from "./domain";
 import { useNotionSyncState, useSession } from "./hooks";
+import { afterCompletionHold } from "./interactions";
+import { isTextEntryTarget, keyboardCommand, viewFromTravelKey } from "./keyboard";
+
+const CommandPalette = lazy(() => import("./components/CommandPalette"));
+const ShortcutGuide = lazy(() => import("./components/ShortcutGuide"));
+const EDITOR_CLOSE_MS = 180;
+
+const viewIcons = {
+  inbox: Inbox,
+  today: Star,
+  upcoming: CalendarDays,
+  anytime: Layers3,
+  someday: Archive,
+  logbook: CheckCircle2,
+  all: ListTodo,
+} as const;
 
 function initialView(): TodoView {
   const value = new URLSearchParams(location.search).get("view");
   return views.some((view) => view.id === value) ? (value as TodoView) : "today";
+}
+
+function initialTask(): string | null {
+  return new URLSearchParams(location.search).get("task");
+}
+
+function editorFieldSelector(focus: "deadline" | "title" | "when"): string {
+  switch (focus) {
+    case "deadline":
+      return "[data-task-deadline]";
+    case "when":
+      return "[data-task-when]";
+    case "title":
+      return "[data-task-title]";
+  }
+}
+
+function nextTaskOutsideSelection(
+  todos: ReadonlyArray<Todo>,
+  selectedIds: ReadonlySet<string>,
+  focusedId: string,
+): Todo | null {
+  const focusedIndex = todos.findIndex((todo) => todo.id === focusedId);
+  return (
+    todos.slice(focusedIndex + 1).find((todo) => !selectedIds.has(todo.id)) ??
+    [...todos]
+      .slice(0, focusedIndex)
+      .reverse()
+      .find((todo) => !selectedIds.has(todo.id)) ??
+    null
+  );
 }
 
 function Login({ onLogin }: { onLogin: (password: string) => Promise<void> }) {
@@ -69,156 +134,439 @@ function Workspace({
   developmentBypass: boolean;
   onLogout: () => void;
 }) {
+  const [firstTask] = useState(initialTask);
   const [view, setView] = useState<TodoView>(initialView);
-  const [selectedId, setSelectedId] = useState<string | null>(() =>
-    new URLSearchParams(location.search).get("task"),
+  const [selectedId, setSelectedId] = useState<string | null>(firstTask);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(firstTask ? [firstTask] : []),
   );
-  const [search, setSearch] = useState("");
-  const [mobileNavigation, setMobileNavigation] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(firstTask);
+  const [closingEditorId, setClosingEditorId] = useState<string | null>(null);
+  const [editingFocus, setEditingFocus] = useState<"deadline" | "title" | "when">("title");
+  const [composer, setComposer] = useState({ open: false, afterId: null as string | null });
+  const [palette, setPalette] = useState({ open: false, query: "" });
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [travelOpen, setTravelOpen] = useState(false);
+  const [completingIds, setCompletingIds] = useState<Set<string>>(new Set());
   const quickEntry = useRef<HTMLInputElement>(null);
-  const deferredSearch = useDeferredValue(search);
+  const bulkWhen = useRef<HTMLInputElement>(null);
+  const bulkDeadline = useRef<HTMLInputElement>(null);
+  const viewSwitcher = useRef<HTMLDetailsElement>(null);
+  const selectionAnchor = useRef<string | null>(firstTask);
+  const selectedIdRef = useRef<string | null>(firstTask);
+  const completionTimers = useRef<Set<number>>(new Set());
+  const editorCloseTimer = useRef<number | null>(null);
   const sync = useNotionSyncState(workspace);
   const { data: allTodos, isLoading } = useLiveQuery((query) =>
     query.from({ todo: workspace.collection }),
   );
-  const todos = useMemo(
-    () => visibleTasks(allTodos, view, deferredSearch),
-    [allTodos, view, deferredSearch],
-  );
+  const todos = useMemo(() => visibleTasks(allTodos, view, ""), [allTodos, view]);
   const counts = useMemo(() => taskCounts(allTodos), [allTodos]);
   const selected = allTodos.find((todo) => todo.id === selectedId) ?? null;
+
+  const clearSelection = () => {
+    selectionAnchor.current = null;
+    selectedIdRef.current = null;
+    setSelectedId(null);
+    setSelectedIds(new Set());
+  };
+  const selectTask = (id: string) => {
+    selectionAnchor.current = id;
+    selectedIdRef.current = id;
+    setSelectedId(id);
+    setSelectedIds(new Set([id]));
+  };
+  const extendSelection = (id: string) => {
+    const anchor = selectionAnchor.current ?? selectedId ?? id;
+    selectionAnchor.current = anchor;
+    selectedIdRef.current = id;
+    setSelectedId(id);
+    setSelectedIds(
+      selectionRange(
+        todos.map((todo) => todo.id),
+        anchor,
+        id,
+      ),
+    );
+  };
+
+  const focusTaskRow = (id: string | null) => {
+    if (!id) return;
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(`[data-task-id="${CSS.escape(id)}"]`)?.focus();
+    });
+  };
+  const closeEditor = (restoreFocus = true) => {
+    const id = editingId;
+    if (!id) return;
+    if (editorCloseTimer.current !== null) window.clearTimeout(editorCloseTimer.current);
+    setClosingEditorId(id);
+    editorCloseTimer.current = window.setTimeout(() => {
+      setEditingId((current) => (current === id ? null : current));
+      setClosingEditorId((current) => (current === id ? null : current));
+      if (restoreFocus) focusTaskRow(id);
+      editorCloseTimer.current = null;
+    }, EDITOR_CLOSE_MS);
+  };
+  const openEditor = (id: string, focus: "deadline" | "title" | "when" = "title") => {
+    if (editorCloseTimer.current !== null) window.clearTimeout(editorCloseTimer.current);
+    editorCloseTimer.current = null;
+    setClosingEditorId(null);
+    selectTask(id);
+    setComposer({ open: false, afterId: null });
+    setEditingFocus(focus);
+    setEditingId(id);
+    requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(editorFieldSelector(focus))?.focus();
+    });
+  };
+  const openComposer = (afterId: string | null) => {
+    setEditingId(null);
+    setComposer({ open: true, afterId });
+    requestAnimationFrame(() => quickEntry.current?.focus());
+  };
+  const stageCompletion = (ids: ReadonlyArray<string>, nextId: string | null) => {
+    const pendingIds = ids.filter((id) => !completingIds.has(id));
+    if (pendingIds.length === 0) return;
+    setCompletingIds((current) => new Set([...current, ...pendingIds]));
+    const timer = afterCompletionHold(() => {
+      for (const id of pendingIds) {
+        workspace.collection.update(id, (draft) => {
+          draft.completed = true;
+          draft.completedAt = new Date().toISOString();
+        });
+      }
+      setCompletingIds((current) => {
+        const next = new Set(current);
+        for (const id of pendingIds) next.delete(id);
+        return next;
+      });
+      setEditingId((current) => (current && pendingIds.includes(current) ? null : current));
+      setClosingEditorId((current) => (current && pendingIds.includes(current) ? null : current));
+      if (pendingIds.includes(selectedIdRef.current ?? "")) {
+        if (nextId) selectTask(nextId);
+        else clearSelection();
+        focusTaskRow(nextId);
+      }
+      completionTimers.current.delete(timer);
+    });
+    completionTimers.current.add(timer);
+  };
+  const toggleTodo = (todo: Todo) => {
+    if (!todo.completed) {
+      const next = nextTaskOutsideSelection(todos, new Set([todo.id]), todo.id);
+      stageCompletion([todo.id], next?.id ?? null);
+      return;
+    }
+    workspace.collection.update(todo.id, (draft) => {
+      draft.completed = false;
+      draft.completedAt = null;
+    });
+  };
+  const completeSelected = () => {
+    if (!selected || selectedIds.size === 0) return;
+    const next = nextTaskOutsideSelection(todos, selectedIds, selected.id);
+    const completing = [...selectedIds].some(
+      (id) => !allTodos.find((todo) => todo.id === id)?.completed,
+    );
+    if (completing) {
+      setEditingId(null);
+      stageCompletion([...selectedIds], next?.id ?? null);
+      return;
+    }
+    for (const id of selectedIds) {
+      workspace.collection.update(id, (draft) => {
+        draft.completed = false;
+        draft.completedAt = null;
+      });
+    }
+    setEditingId(null);
+    if (next) selectTask(next.id);
+    else clearSelection();
+    focusTaskRow(next?.id ?? null);
+  };
+  const moveSelected = (direction: -1 | 1) => {
+    if (!selected) return;
+    const positions = positionsForBlockMove(todos, selectedIds, direction);
+    for (const [id, position] of positions) {
+      workspace.collection.update(id, (draft) => {
+        draft.position = position;
+      });
+    }
+    focusTaskRow(selected.id);
+  };
+  const openDateAction = (field: "deadline" | "when") => {
+    if (!selectedId) return;
+    if (selectedIds.size === 1) {
+      openEditor(selectedId, field);
+      return;
+    }
+    const input = field === "when" ? bulkWhen.current : bulkDeadline.current;
+    input?.showPicker();
+  };
+  const applyDateToSelection = (field: "deadline" | "scheduledFor", value: string) => {
+    if (!value) return;
+    for (const id of selectedIds) {
+      workspace.collection.update(id, (draft) => {
+        draft[field] = value;
+      });
+    }
+  };
+  const changeView = (next: TodoView) => {
+    if (editorCloseTimer.current !== null) window.clearTimeout(editorCloseTimer.current);
+    editorCloseTimer.current = null;
+    setView(next);
+    clearSelection();
+    setEditingId(null);
+    setClosingEditorId(null);
+    setComposer({ open: false, afterId: null });
+    if (viewSwitcher.current) viewSwitcher.current.open = false;
+  };
 
   useEffect(() => {
     const parameters = new URLSearchParams(location.search);
     parameters.set("view", view);
-    if (selectedId) parameters.set("task", selectedId);
+    if (editingId) parameters.set("task", editingId);
     else parameters.delete("task");
     history.replaceState(null, "", `${location.pathname}?${parameters}`);
-  }, [view, selectedId]);
+  }, [editingId, view]);
+
+  useEffect(() => {
+    if (!travelOpen) return;
+    const timeout = window.setTimeout(() => setTravelOpen(false), 1_500);
+    return () => window.clearTimeout(timeout);
+  }, [travelOpen]);
+
+  useEffect(
+    () => () => {
+      for (const timer of completionTimers.current) window.clearTimeout(timer);
+      if (editorCloseTimer.current !== null) window.clearTimeout(editorCloseTimer.current);
+    },
+    [],
+  );
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
-      const command = event.metaKey || event.ctrlKey;
-      if (command && event.key.toLowerCase() === "n") {
-        event.preventDefault();
-        quickEntry.current?.focus();
-        return;
-      }
-      if (command && event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        document.querySelector<HTMLInputElement>("[data-search-input]")?.focus();
-        return;
-      }
-      if (command) {
-        const target = views.find((candidate) => candidate.shortcut === event.key);
-        if (target) {
+      if (event.defaultPrevented) return;
+      if (travelOpen && !isTextEntryTarget(event.target)) {
+        const destination = viewFromTravelKey(event.key);
+        if (destination) {
           event.preventDefault();
-          setView(target.id);
-          setMobileNavigation(false);
+          setTravelOpen(false);
+          changeView(destination);
+          return;
         }
-      } else if (event.key === "Escape") {
-        setSelectedId(null);
-        setMobileNavigation(false);
+        if (event.key.length === 1) setTravelOpen(false);
+      }
+      const command = keyboardCommand(event);
+      if (!command) return;
+      event.preventDefault();
+      switch (command.type) {
+        case "begin-travel":
+          setTravelOpen(true);
+          break;
+        case "close":
+          if (palette.open) setPalette((current) => ({ ...current, open: false }));
+          else if (shortcutsOpen) setShortcutsOpen(false);
+          else if (viewSwitcher.current?.open) viewSwitcher.current.open = false;
+          else if (editingId) closeEditor();
+          else if (composer.open) setComposer({ open: false, afterId: null });
+          else clearSelection();
+          break;
+        case "complete":
+          completeSelected();
+          break;
+        case "create":
+          openComposer(command.belowSelection ? selectedId : null);
+          break;
+        case "focus-deadline":
+          openDateAction("deadline");
+          break;
+        case "focus-when":
+          openDateAction("when");
+          break;
+        case "move":
+          moveSelected(command.direction);
+          break;
+        case "open":
+          if (selectedId) openEditor(selectedId);
+          break;
+        case "search":
+          setTravelOpen(false);
+          setShortcutsOpen(false);
+          setPalette({ open: true, query: command.query ?? "" });
+          break;
+        case "show-shortcuts":
+          setTravelOpen(false);
+          setPalette((current) => ({ ...current, open: false }));
+          setShortcutsOpen(true);
+          break;
       }
     };
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, []);
+  });
 
   const currentView = views.find((candidate) => candidate.id === view)!;
-  const changeView = (next: TodoView) => {
-    setView(next);
-    setSelectedId(null);
-    setMobileNavigation(false);
-  };
+  const ViewIcon = viewIcons[view];
 
   return (
-    <main className={`app-shell${selected ? " has-inspector" : ""}`}>
-      <div className={mobileNavigation ? "sidebar-shell is-open" : "sidebar-shell"}>
-        <button
-          className="mobile-scrim"
-          onClick={() => setMobileNavigation(false)}
-          aria-label="Close navigation"
-        />
-        <Sidebar
-          view={view}
-          counts={counts}
-          search={search}
-          sync={sync}
-          developmentBypass={developmentBypass}
-          onView={changeView}
-          onSearch={setSearch}
-          onSync={() => void workspace.collection.utils.syncNow()}
-          onLogout={onLogout}
-        />
-      </div>
-
-      <section className={selected ? "workspace-list mobile-hidden" : "workspace-list"}>
-        <header className="list-header">
+    <main className={editingId ? "app-shell is-focused" : "app-shell"}>
+      <section
+        className="workspace-list"
+        onPointerDown={(event) => {
+          const target = event.target;
+          if (!(target instanceof Element)) return;
+          if (editingId && !target.closest(".task-editor")) closeEditor(false);
+          if (!target.closest(".task-row, .task-editor, .quick-entry, .bulk-date-picker")) {
+            clearSelection();
+          }
+        }}
+      >
+        <header className="top-bar">
+          {developmentBypass ? (
+            <span className="top-bar-spacer" />
+          ) : (
+            <button className="top-control" onClick={onLogout} aria-label="Lock workspace">
+              <LockKeyhole />
+            </button>
+          )}
+          <details ref={viewSwitcher} className="view-switcher">
+            <summary>
+              {currentView.label}
+              <ChevronsUpDown />
+            </summary>
+            <nav className="view-menu" aria-label="Choose a list">
+              {views.map((destination) => {
+                const DestinationIcon = viewIcons[destination.id];
+                return (
+                  <button
+                    key={destination.id}
+                    className={destination.id === view ? "is-active" : undefined}
+                    onClick={() => changeView(destination.id)}
+                  >
+                    <DestinationIcon />
+                    <span>{destination.label}</span>
+                    {counts[destination.id] > 0 && <small>{counts[destination.id]}</small>}
+                  </button>
+                );
+              })}
+            </nav>
+          </details>
           <button
-            className="mobile-menu"
-            onClick={() => setMobileNavigation(true)}
-            aria-label="Open navigation"
+            className={`top-control top-sync status-${sync.status}`}
+            onClick={() => void workspace.collection.utils.syncNow()}
+            aria-label={sync.error ? `Sync error: ${sync.error}` : `Notion sync: ${sync.status}`}
           >
-            <Menu />
+            {sync.status === "offline" ? <CloudOff /> : <Cloud />}
+            <span aria-hidden="true" />
           </button>
-          <div>
-            <p>
-              {view === "today"
-                ? new Intl.DateTimeFormat(undefined, {
-                    weekday: "long",
-                    month: "long",
-                    day: "numeric",
-                  }).format(new Date())
-                : "Your tasks"}
-            </p>
+        </header>
+
+        <header className="list-header">
+          <div className="list-heading">
+            <span className={`view-mark view-mark-${view}`} aria-hidden="true">
+              <ViewIcon />
+            </span>
             <h1>{currentView.label}</h1>
           </div>
-          <div className="header-status" title={sync.error ?? undefined}>
-            {sync.status === "offline" ? (
-              <CloudOff />
-            ) : (
-              <RotateCw className={sync.status === "syncing" ? "is-spinning" : ""} />
-            )}
-            <span>
-              {sync.pendingMutations
-                ? `${sync.pendingMutations} pending`
-                : sync.status === "synced"
-                  ? "Synced"
-                  : sync.status}
-            </span>
-          </div>
         </header>
-        <QuickEntry
-          ref={quickEntry}
-          collection={workspace.collection}
-          todos={allTodos}
-          view={view}
-          onCreated={setSelectedId}
-        />
+
         {sync.error && (
           <div className="sync-error-banner">
             <span>{sync.error}</span>
             <button onClick={() => void workspace.collection.utils.syncNow()}>Try again</button>
           </div>
         )}
+
         <TaskList
-          collection={workspace.collection}
+          workspace={workspace}
           todos={todos}
           view={view}
-          selectedId={selectedId}
+          selectedIds={selectedIds}
+          completingIds={completingIds}
+          editingId={editingId}
+          closingEditorId={closingEditorId}
+          editingFocus={editingFocus}
+          composer={composer}
           isLoading={isLoading}
-          onSelect={setSelectedId}
+          onSelect={selectTask}
+          onExtendSelection={extendSelection}
+          onOpen={openEditor}
+          onComplete={completeSelected}
+          onToggleComplete={toggleTodo}
+          onCloseEditor={closeEditor}
+          onCreateBelow={openComposer}
+          onCreated={(id) => {
+            setComposer({ open: false, afterId: null });
+            openEditor(id);
+          }}
+          onDismissComposer={() => {
+            setComposer({ open: false, afterId: null });
+            focusTaskRow(selectedId);
+          }}
+          quickEntryRef={quickEntry}
         />
+
+        {selectedIds.size > 1 && (
+          <>
+            <input
+              ref={bulkWhen}
+              className="bulk-date-picker"
+              type="date"
+              tabIndex={-1}
+              aria-label="Schedule selected tasks"
+              onChange={(event) => {
+                applyDateToSelection("scheduledFor", event.target.value);
+                event.currentTarget.value = "";
+              }}
+            />
+            <input
+              ref={bulkDeadline}
+              className="bulk-date-picker"
+              type="date"
+              tabIndex={-1}
+              aria-label="Set deadline for selected tasks"
+              onChange={(event) => {
+                applyDateToSelection("deadline", event.target.value);
+                event.currentTarget.value = "";
+              }}
+            />
+          </>
+        )}
+
+        {travelOpen && (
+          <div className="travel-hint" role="status">
+            <strong>Go to</strong>
+            {views.map((destination) => (
+              <span key={destination.id}>
+                <kbd>{destination.travelKey}</kbd> {destination.label}
+              </span>
+            ))}
+          </div>
+        )}
       </section>
 
-      {selected && (
-        <TaskInspector
-          workspace={workspace}
-          todo={selected}
-          onClose={() => setSelectedId(null)}
-          onDeleted={() => setSelectedId(null)}
-        />
+      {palette.open && (
+        <Suspense fallback={null}>
+          <CommandPalette
+            open
+            query={palette.query}
+            todos={allTodos}
+            onQuery={(query) => setPalette({ open: true, query })}
+            onClose={() => setPalette((current) => ({ ...current, open: false }))}
+            onView={changeView}
+            onTask={(todo: Todo) => {
+              setView("all");
+              openEditor(todo.id);
+            }}
+          />
+        </Suspense>
+      )}
+      {shortcutsOpen && (
+        <Suspense fallback={null}>
+          <ShortcutGuide open onClose={() => setShortcutsOpen(false)} />
+        </Suspense>
       )}
     </main>
   );

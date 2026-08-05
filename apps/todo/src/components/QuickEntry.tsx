@@ -1,21 +1,28 @@
-import { forwardRef, useState, type FormEvent } from "react";
-import { ArrowUp, Plus } from "lucide-react";
+import { forwardRef, useEffect, useState, type FormEvent } from "react";
+import { ArrowUp, Check, X } from "lucide-react";
 import type { TodoCollection } from "../collection";
-import { nextPosition, parseQuickTask, type Todo, type TodoView } from "../domain";
+import { parseQuickTask, type TodoView } from "../domain";
 
 interface QuickEntryProps {
   collection: TodoCollection;
-  todos: ReadonlyArray<Todo>;
   view: TodoView;
+  position: number;
   onCreated: (id: string) => void;
+  onDismiss: () => void;
 }
 
 export const QuickEntry = forwardRef<HTMLInputElement, QuickEntryProps>(function QuickEntry(
-  { collection, todos, view, onCreated },
+  { collection, view, position, onCreated, onDismiss },
   ref,
 ) {
   const [value, setValue] = useState("");
-  const [hintVisible, setHintVisible] = useState(false);
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      if (typeof ref === "function") return;
+      ref?.current?.focus();
+    });
+  }, [ref]);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -25,53 +32,52 @@ export const QuickEntry = forwardRef<HTMLInputElement, QuickEntryProps>(function
     collection.insert({
       ...draft,
       id,
-      position: nextPosition(todos),
+      position,
       completed: false,
       completedAt: null,
       deadline: null,
     });
     setValue("");
-    setHintVisible(false);
     onCreated(id);
   };
 
   return (
     <form className="quick-entry" onSubmit={submit}>
-      <span className="quick-plus" aria-hidden="true">
-        <Plus size={19} />
+      <span className="quick-check" aria-hidden="true">
+        <Check size={13} />
       </span>
-      <label className="sr-only" htmlFor="quick-task">
+      <label className="sr-only" htmlFor="quick-task-title">
         Create a task
       </label>
       <input
         ref={ref}
-        id="quick-task"
+        id="quick-task-title"
         value={value}
         onChange={(event) => setValue(event.target.value)}
-        onFocus={() => setHintVisible(true)}
-        onBlur={() => !value && setHintVisible(false)}
-        placeholder="New task"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onDismiss();
+          }
+        }}
+        placeholder="New to-do"
         autoComplete="off"
       />
-      {!value && <kbd>⌘N</kbd>}
       {value && (
-        <button type="submit" aria-label="Create task">
+        <button className="quick-submit" type="submit" aria-label="Create task">
           <ArrowUp size={16} strokeWidth={2.5} />
         </button>
       )}
-      {hintVisible && (
-        <div className="quick-hints" role="note">
-          <span>
-            <b>@today</b> schedule
-          </span>
-          <span>
-            <b>@someday</b> file away
-          </span>
-          <span>
-            <b>!high</b> prioritize
-          </span>
-        </div>
-      )}
+      <button className="quick-dismiss" type="button" onClick={onDismiss} aria-label="Cancel">
+        <X size={15} />
+      </button>
+      <p className="quick-notes" aria-hidden="true">
+        Notes
+      </p>
+      <p className="quick-destination">
+        <span>{view === "all" || view === "logbook" ? "Inbox" : view}</span>
+        <small>@today · @someday · !high</small>
+      </p>
     </form>
   );
 });

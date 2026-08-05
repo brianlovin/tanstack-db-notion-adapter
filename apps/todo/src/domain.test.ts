@@ -2,6 +2,10 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   localDate,
   parseQuickTask,
+  positionAfter,
+  positionForMove,
+  positionsForBlockMove,
+  selectionRange,
   taskCounts,
   taskMatchesView,
   visibleTasks,
@@ -70,5 +74,41 @@ describe("task domain", () => {
     expect(matches).toHaveLength(100);
     expect(matches[0]?.id).toBe("task-9900");
     expect(taskCounts(rows, "2026-08-04").all).toBe(10_000);
+  });
+
+  it("places new and moved tasks between their neighbors", () => {
+    const rows = [
+      todo({ id: "one", position: 1_000 }),
+      todo({ id: "two", position: 2_000 }),
+      todo({ id: "three", position: 3_000 }),
+    ];
+    expect(positionAfter(rows, "one")).toBe(1_500);
+    expect(positionAfter(rows, null)).toBe(0);
+    expect(positionForMove(rows, "three", -1)).toBe(1_500);
+    expect(positionForMove(rows, "one", 1)).toBe(2_500);
+  });
+
+  it("selects the contiguous range between the anchor and keyboard focus", () => {
+    const ids = ["one", "two", "three", "four"];
+    expect([...selectionRange(ids, "two", "four")]).toEqual(["two", "three", "four"]);
+    expect([...selectionRange(ids, "three", "one")]).toEqual(["one", "two", "three"]);
+    expect([...selectionRange(ids, "missing", "four")]).toEqual(["four"]);
+  });
+
+  it("moves a contiguous selection as an ordered block", () => {
+    const rows = [
+      todo({ id: "one", position: 1_000 }),
+      todo({ id: "two", position: 2_000 }),
+      todo({ id: "three", position: 3_000 }),
+      todo({ id: "four", position: 4_000 }),
+    ];
+    expect([...positionsForBlockMove(rows, new Set(["two", "three"]), -1)]).toEqual([
+      ["two", -1_000],
+      ["three", 0],
+    ]);
+    expect([...positionsForBlockMove(rows, new Set(["two", "three"]), 1)]).toEqual([
+      ["two", 5_000],
+      ["three", 6_000],
+    ]);
   });
 });
