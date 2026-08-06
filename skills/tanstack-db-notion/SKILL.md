@@ -38,7 +38,7 @@ For an existing data source, introspect it:
 ```sh
 npx tanstack-db-notion init \
   --env .env \
-  --id "https://www.notion.so/workspace/Your-Database-..." \
+  --id "https://app.notion.com/p/workspace/..." \
   --manifest notion.schema.json \
   --out src/notion.generated.ts \
   --name projectSchema
@@ -144,11 +144,13 @@ overwrite.
 For authenticated startup, configure the content client with
 `autoStart: false`, then resume and pause it with the main collection.
 
-For a new row, choose the client ID before insertion, pass it to both
-`collection.insert({ id, ... })` and `content.createDraft(id)`, then call
-`content.attachPage(id, row.notionPageId)` after Notion creates the page. For an
-existing row, call `content.load(row.id, row.notionPageId)` on demand. Use
-`content.flush(id)` as save-now or explicit retry.
+Pass the TanStack DB `collection` to `createNotionPageContentClient`. For a new
+row, choose the client ID, persist `content.createDraft(id)` first, then call
+`collection.insert({ id, ... })`. The client observes all rows and attaches the
+Notion page ID after an offline insert syncs, even when that row is not selected.
+For an existing row, call `content.attachPage(row.id, row.notionPageId)` on
+demand. Use `content.flush(id)` as save-now or explicit retry. If the collection
+is omitted, the host must attach every pending draft itself.
 
 Do not eagerly fetch every page body. Refuse lossy replacement when Notion
 reports truncation or unknown blocks.

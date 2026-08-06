@@ -12,7 +12,8 @@
     "moduleResolution": "bundler",
     "paths": {
       "@tanstack/db": ["../../node_modules/@tanstack/db"],
-      "@tanstack/react-db": ["../../node_modules/@tanstack/react-db"]
+      "@tanstack/react-db": ["../../node_modules/@tanstack/react-db"],
+      "tanstack-db-notion-adapter/react": ["../../src/react.ts"]
     },
     "allowImportingTsExtensions": true,
     "verbatimModuleSyntax": true,

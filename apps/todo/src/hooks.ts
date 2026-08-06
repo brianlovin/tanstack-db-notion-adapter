@@ -1,35 +1,20 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useState } from "react";
 import type { NotionPageContentSnapshot, NotionSyncState } from "tanstack-db-notion-adapter";
+import {
+  useNotionPageContent as useAdapterPageContent,
+  useNotionSyncState as useAdapterSyncState,
+} from "tanstack-db-notion-adapter/react";
 import type { TodoWorkspace } from "./collection";
 
-const serverSyncState: NotionSyncState = {
-  status: "idle",
-  pendingMutations: 0,
-  lastSyncedAt: null,
-  remoteVersion: null,
-  isOnline: true,
-  storage: "memory",
-  error: null,
-  quarantine: null,
-};
-
 export function useNotionSyncState(workspace: TodoWorkspace): NotionSyncState {
-  return useSyncExternalStore(
-    workspace.collection.utils.subscribeSyncState,
-    workspace.collection.utils.getSyncState,
-    () => serverSyncState,
-  );
+  return useAdapterSyncState(workspace.collection);
 }
 
 export function useTaskContent(
   workspace: TodoWorkspace,
   key: string | null,
 ): NotionPageContentSnapshot | undefined {
-  return useSyncExternalStore(
-    workspace.content.subscribe,
-    () => (key ? workspace.content.get(key) : undefined),
-    () => undefined,
-  );
+  return useAdapterPageContent(workspace.content, key);
 }
 
 export interface SessionState {

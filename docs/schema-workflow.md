@@ -29,7 +29,7 @@ writes it to the manifest:
 ```sh
 npx tanstack-db-notion init \
   --env .env \
-  --id "https://www.notion.so/workspace/Your-Database-..." \
+  --id "https://app.notion.com/p/workspace/..." \
   --manifest notion.schema.json \
   --out src/notion.generated.ts \
   --name projectSchema

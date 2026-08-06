@@ -36,6 +36,14 @@ that acknowledged edit.
 Keep the local draft and retrieve the remote body. Let the user accept the
 remote copy or explicitly overwrite it. Do not auto-merge arbitrary Markdown.
 
+## Offline row synced but its page body is empty
+
+Pass the row collection to `createNotionPageContentClient({ collection })` and
+create the content draft before inserting the row. The content client then
+observes page-ID assignment for every row and flushes unselected drafts. If the
+collection is omitted, call `attachPage` for every draft whose row receives a
+Notion page ID; attaching only the selected row can strand content indefinitely.
+
 ## `property_conflict`
 
 Inspect `lastError.conflicts` for each field's base, local, and remote value.

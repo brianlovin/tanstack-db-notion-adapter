@@ -196,6 +196,24 @@ property renames, conflicts, and durable SQLite idempotency against live Notion.
 - [ ] Publish the verified package to npm and repeat the clean install from the
   registry rather than a tarball.
 
+A second Next.js clean-room build repeated the live schema, CRUD, Markdown,
+offline outbox, delete, and IndexedDB journeys, then identified these follow-up
+integration gaps:
+
+- [x] Accept `app.notion.com` Copy-link URLs as well as legacy Notion hosts and
+  bare IDs.
+- [x] Observe the full row collection from the page-content client so an
+  unselected offline draft is attached and flushed when its row receives a
+  Notion page ID.
+- [x] Create content drafts before row insertion in the README and Notes
+  example, and define `attachPage` versus the lower-level `load` operation.
+- [x] Ship optional React hooks with stable server snapshots for sync state and
+  page content.
+- [x] Document that `useLiveQuery` UI in Next.js App Router needs a separate
+  client-only dynamic wrapper.
+- [x] Document polling defaults and the current optional-field limitation of
+  TanStack DB update drafts.
+
 ## Test program
 
 ### Every pull request

@@ -64,6 +64,7 @@ export {
   createNotionPageContentClient,
   type NotionPageContentClient,
   type NotionPageContentClientConfig,
+  type NotionPageContentCollection,
   type NotionPageContentSnapshot,
   type NotionPageContentStatus,
 } from './content-client.js'

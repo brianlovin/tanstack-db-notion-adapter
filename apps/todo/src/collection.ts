@@ -17,6 +17,7 @@ export function createTodoWorkspace() {
   const content = createNotionPageContentClient({
     id: "daylight-todos",
     endpoint: "/api/todos",
+    collection,
     debounceMs: 800,
   });
   return {

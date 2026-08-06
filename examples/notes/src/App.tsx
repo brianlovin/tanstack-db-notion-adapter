@@ -1,9 +1,10 @@
-import { useEffect, useState, useSyncExternalStore } from 'react'
+import { useEffect, useState } from 'react'
 import { useLiveQuery } from '@tanstack/react-db'
-import type {
-  NotionPageContentSnapshot,
-  NotionSyncState,
-} from 'tanstack-db-notion-adapter'
+import type { NotionPageContentSnapshot } from 'tanstack-db-notion-adapter'
+import {
+  useNotionPageContent,
+  useNotionSyncState,
+} from 'tanstack-db-notion-adapter/react'
 import { noteCollection } from './collection'
 import { noteContent } from './content'
 import type {
@@ -17,33 +18,6 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   day: 'numeric',
   year: 'numeric',
 })
-const syncFallback: NotionSyncState = {
-  status: 'idle',
-  pendingMutations: 0,
-  lastSyncedAt: null,
-  remoteVersion: null,
-  isOnline: true,
-  storage: 'memory',
-  error: null,
-  quarantine: null,
-}
-
-function useSyncState(): NotionSyncState {
-  return useSyncExternalStore(
-    noteCollection.utils.subscribeSyncState,
-    noteCollection.utils.getSyncState,
-    () => syncFallback,
-  )
-}
-
-function usePageContent(key: string | null): NotionPageContentSnapshot | undefined {
-  return useSyncExternalStore(
-    noteContent.subscribe,
-    () => (key ? noteContent.get(key) : undefined),
-    () => undefined,
-  )
-}
-
 function today(): string {
   const date = new Date()
   return new Date(date.getTime() - date.getTimezoneOffset() * 60_000)
@@ -170,7 +144,7 @@ function NoteEditor({ note, content, error, onError }: NoteEditorProps) {
 }
 
 export function App() {
-  const sync = useSyncState()
+  const sync = useNotionSyncState(noteCollection)
   const { data: notes = [], isLoading } = useLiveQuery((query) =>
     query.from({ note: noteCollection }).orderBy(({ note }) => note.updatedAt, 'desc'),
   )
@@ -179,7 +153,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null)
   const selectedNote = notes.find((note) => note.id === requestedId) ?? notes[0]
   const selectedId = selectedNote?.id ?? null
-  const content = usePageContent(selectedId)
+  const content = useNotionPageContent(noteContent, selectedId)
 
   useEffect(() => {
     if (!selectedNote) return

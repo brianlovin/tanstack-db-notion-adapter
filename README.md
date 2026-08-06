@@ -29,7 +29,7 @@ Paste the database URL directly into `init`; the CLI resolves its data source ID
 ```sh
 npx tanstack-db-notion init \
   --env .env \
-  --id "https://www.notion.so/your-workspace/Your-Database-..." \
+  --id "https://app.notion.com/p/your-workspace/..." \
   --manifest notion.schema.json \
   --out src/notion.generated.ts \
   --name todoSchema
@@ -128,6 +128,18 @@ The generated `TodoSchemaInput` type is the draft shape for both inserts and
 updates. Fields with defaults may be optional. The generated `TodoSchemaRow`
 type is the complete synced row, including Notion metadata.
 
+TanStack DB currently uses the insert input type for update callbacks, so a
+defaulted field can appear optional even though synced rows always contain it.
+Read the current value from the row when updating arrays:
+
+```ts
+todos.update(todo.id, (draft) => {
+  draft.tags = todo.tags.includes('Important')
+    ? todo.tags.filter((tag) => tag !== 'Important')
+    : [...todo.tags, 'Important']
+})
+```
+
 Use `useLiveQuery` normally; filtering, sorting, joins, and pagination operate
 against the local collection:
 
@@ -140,6 +152,44 @@ const { data: openTodos = [] } = useLiveQuery((query) =>
     .where(({ todo }) => eq(todo.completed, false)),
 )
 ```
+
+The collection reconciles with Notion every 60 seconds by default and when a
+background tab becomes visible. Set `pollIntervalMs: 0` to disable polling or
+configure `invalidationPollIntervalMs` when using webhook invalidation.
+
+### Next.js App Router
+
+`useLiveQuery` does not provide a server snapshot. A `'use client'` component
+is still prerendered by Next.js, so render collection-backed UI through a
+client-only dynamic wrapper:
+
+```tsx
+// journal-client.tsx
+'use client'
+
+import dynamic from 'next/dynamic'
+
+const Journal = dynamic(() => import('./journal').then((module) => module.Journal), {
+  ssr: false,
+})
+
+export function JournalClient() {
+  return <Journal />
+}
+```
+
+```tsx
+// journal.tsx
+'use client'
+
+export function Journal() {
+  const { data = [] } = useLiveQuery((query) => query.from({ entry: entries }))
+  // ...
+}
+```
+
+Import `JournalClient` from the Server Component. Next.js does not allow
+`ssr: false` directly inside a Server Component.
 
 ## Authenticated startup
 
@@ -196,6 +246,7 @@ import { createNotionPageContentClient } from 'tanstack-db-notion-adapter'
 const noteContent = createNotionPageContentClient({
   id: 'notes',
   endpoint: '/api/notes',
+  collection: notes,
   debounceMs: 750,
   autoStart: false,
 })
@@ -205,22 +256,38 @@ For an authenticated app, call `noteContent.resumeSync()` with the collection
 after session restoration and `noteContent.pauseSync()` before logout. Omit
 `autoStart` when the endpoint is ready as soon as the client loads.
 
-The lifecycle is explicit:
+Create the durable body draft before inserting its row. Passing `collection`
+lets the client observe every row—not only the selected one—and attach the
+Notion page ID as soon as the offline insert syncs:
 
 ```ts
 const id = crypto.randomUUID()
-notes.insert({ id, title: 'New note' })
 await noteContent.createDraft(id, '# New note')
+notes.insert({ id, title: 'New note' })
 
-// Once the synced row contains its Notion page ID:
-await noteContent.attachPage(id, note.notionPageId)
-
-await noteContent.load(note.id, note.notionPageId) // existing page
+await noteContent.attachPage(note.id, note.notionPageId) // open existing page
 await noteContent.update(note.id, nextMarkdown)    // local save + debounced flush
 await noteContent.flush(note.id)                   // explicit retry/save-now
 ```
 
-Pending attached drafts retry after recreation and when connectivity returns.
+Use `attachPage` when opening an existing page: it creates the local record when
+needed, loads the remote body, and schedules any pending draft. `load` is the
+lower-level remote read. If `collection` is omitted, the application must call
+`attachPage` for every draft whose row receives a page ID.
+
+React bindings provide SSR-safe subscriptions for adapter state:
+
+```tsx
+import {
+  useNotionPageContent,
+  useNotionSyncState,
+} from 'tanstack-db-notion-adapter/react'
+
+const sync = useNotionSyncState(notes)
+const content = useNotionPageContent(noteContent, selectedId)
+```
+
+Pending drafts retry after recreation and when connectivity returns.
 Conflicts retain both versions; resolve with `acceptRemote` or the explicit
 `overwriteRemote({ acceptDataLoss: true })` escape hatch.
 

@@ -52,6 +52,10 @@
       "types": "./dist/schema-tools.d.ts",
       "import": "./dist/schema-tools.js"
     },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -88,7 +92,13 @@
     "@standard-schema/spec": "^1.1.0"
   },
   "peerDependencies": {
-    "@tanstack/db": "^0.6.17"
+    "@tanstack/db": "^0.6.17",
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@hono/node-server": "^2.0.12",

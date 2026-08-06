@@ -589,6 +589,29 @@ describe('createNotionSyncHandler', () => {
     ])
   })
 
+  it('accepts the app.notion.com URL produced by Copy link', async () => {
+    const databaseId = '3b4c711c0ceb80248495e50e76712f0f'
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      if (url.pathname === `/v1/data_sources/${databaseId}`) {
+        return Response.json({ object: 'data_source' })
+      }
+      return Response.json({ message: 'Missing' }, { status: 404 })
+    })
+
+    await expect(
+      resolveNotionDataSourceId({
+        token: 'personal-access-token',
+        id: `https://app.notion.com/p/brianlovin/${databaseId}?v=view-id`,
+        fetch: fetch as typeof globalThis.fetch,
+        baseUrl: 'https://api.notion.test',
+      }),
+    ).resolves.toBe(databaseId)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('lists names and IDs when a database has multiple data sources', async () => {
     const fetch = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(

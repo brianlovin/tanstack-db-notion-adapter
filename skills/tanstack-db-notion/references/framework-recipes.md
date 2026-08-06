@@ -21,6 +21,12 @@ export const POST = sync
 export const OPTIONS = sync
 ```
 
+`useLiveQuery` has no server snapshot. A Client Component is still prerendered,
+so Next.js collection UI must be loaded through `next/dynamic` with
+`ssr: false` in a separate Client Component wrapper. The adapter's
+`useNotionSyncState` and `useNotionPageContent` hooks from
+`tanstack-db-notion-adapter/react` include stable server snapshots.
+
 For a public read-only feed, state that policy on the handler rather than
 providing mutation idempotency infrastructure:
 

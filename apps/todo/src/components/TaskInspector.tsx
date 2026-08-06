@@ -97,15 +97,11 @@ export function TaskInspector({
     const prepare = async () => {
       try {
         await workspace.content.ready();
-        let current = workspace.content.get(todo.id);
-        if (!current) {
+        if (!workspace.content.get(todo.id)) {
           await workspace.content.createDraft(todo.id);
-          current = workspace.content.get(todo.id);
         }
-        if (todo.notionPageId && current?.notionPageId !== todo.notionPageId) {
+        if (todo.notionPageId) {
           await workspace.content.attachPage(todo.id, todo.notionPageId);
-        } else if (todo.notionPageId && current && !current.pending) {
-          await workspace.content.load(todo.id, todo.notionPageId);
         }
         if (active) setNotesError(null);
       } catch (error) {

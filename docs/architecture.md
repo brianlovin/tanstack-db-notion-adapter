@@ -54,8 +54,11 @@ conflict details rather than overwriting the same remotely edited property.
 
 Data-source properties remain eager rows. Page bodies are a separate lazy
 enhanced-Markdown resource, avoiding an N+1 request at collection startup. A
-new offline note stores its body under the stable client key and attaches the
-Notion page ID after row creation.
+new offline note stores its body under the stable client key. When configured
+with the row collection, the content client observes every row and attaches a
+draft as soon as row sync supplies its Notion page ID. This collection-wide
+bridge keeps unselected offline drafts from being stranded; applications that
+omit the collection must perform the same attachment explicitly.
 
 Editor updates persist immediately and increment a revision. A 750 ms timer
 debounces only the remote flush. Each page has one in-flight request; a newer

@@ -789,8 +789,10 @@ function notionObjectId(value: string): string {
   } catch {
     throw new Error('The configured Notion URL is invalid.')
   }
-  if (!/(^|\.)notion\.(so|site)$/i.test(url.hostname)) {
-    throw new Error('Expected a notion.so or notion.site database URL.')
+  if (!/(^|\.)notion\.(com|so|site)$/i.test(url.hostname)) {
+    throw new Error(
+      'Expected a Notion database URL (notion.com, notion.so, or notion.site) or a bare database/data-source ID.',
+    )
   }
   const matches = url.pathname.match(
     /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}/gi,

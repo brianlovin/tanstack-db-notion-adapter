@@ -54,6 +54,8 @@ createNotionSyncHandler({
 ## Request and refresh budget
 
 - Notion returns at most 100 rows per query page.
+- Collections poll every 60 seconds by default and reconcile when a background
+  tab becomes visible. Set `pollIntervalMs: 0` to disable periodic refresh.
 - `completeProperties` adds paginated property requests per row and field.
 - Share one `NotionRateLimiter` for handlers using the same connection.
 - Add webhook invalidation for low-latency refresh, but keep periodic polling as

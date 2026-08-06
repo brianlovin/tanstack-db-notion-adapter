@@ -60,6 +60,7 @@ try {
     '--no-audit',
     '--no-fund',
     tarball,
+    'react@^19',
   ])
 
   await writeFile(
@@ -67,8 +68,9 @@ try {
     `import { notion, notionCollectionOptions } from 'tanstack-db-notion-adapter'
 import { createNotionSyncHandler } from 'tanstack-db-notion-adapter/server'
 import { generateNotionSchemaSource } from 'tanstack-db-notion-adapter/schema-tools'
+import { useNotionPageContent, useNotionSyncState } from 'tanstack-db-notion-adapter/react'
 
-for (const [name, value] of Object.entries({ notion, notionCollectionOptions, createNotionSyncHandler, generateNotionSchemaSource })) {
+for (const [name, value] of Object.entries({ notion, notionCollectionOptions, createNotionSyncHandler, generateNotionSchemaSource, useNotionPageContent, useNotionSyncState })) {
   if (typeof value !== (name === 'notion' ? 'object' : 'function')) {
     throw new Error(\`Missing public export: \${name}\`)
   }

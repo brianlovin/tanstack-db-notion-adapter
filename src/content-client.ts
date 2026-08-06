@@ -33,9 +33,24 @@ export interface NotionPageContentSnapshot {
   error: string | null
 }
 
-export interface NotionPageContentClientConfig {
+export interface NotionPageContentCollection<TItem extends object> {
+  readonly config: {
+    readonly schema?: {
+      getKey: (row: TItem) => string
+      getPageId: (row: TItem) => string | null
+    }
+  }
+  values: () => IterableIterator<TItem>
+  subscribeChanges: (listener: () => void) => { unsubscribe: () => void }
+}
+
+export interface NotionPageContentClientConfig<
+  TItem extends object = Record<string, unknown>,
+> {
   id: string
   endpoint: string
+  /** Automatically attaches drafts when synced rows receive a Notion page ID. */
+  collection?: NotionPageContentCollection<TItem>
   storage?: NotionCollectionStorage
   fetch?: typeof globalThis.fetch
   /** Wait after the latest local edit before flushing to Notion. @default 750 */
@@ -54,8 +69,11 @@ export interface NotionPageContentClient {
   pauseSync: () => void
   get: (key: string) => NotionPageContentSnapshot | undefined
   subscribe: (listener: () => void) => () => void
+  /** Creates a durable local draft. Call this before inserting a new row. */
   createDraft: (key: string, initialMarkdown?: string) => Promise<void>
+  /** Fetches and merges a known page. Prefer attachPage for editable content. */
   load: (key: string, notionPageId: string) => Promise<NotionPageContentSnapshot>
+  /** Creates a missing draft, loads the page, and schedules pending content. */
   attachPage: (key: string, notionPageId: string) => Promise<void>
   update: (key: string, markdown: string) => Promise<void>
   flush: (key: string) => Promise<void>
@@ -105,8 +123,10 @@ function randomId(): string {
  * API. Drafts commit to browser storage immediately; only remote writes are
  * debounced and coalesced.
  */
-export function createNotionPageContentClient(
-  config: NotionPageContentClientConfig,
+export function createNotionPageContentClient<
+  TItem extends object = Record<string, unknown>,
+>(
+  config: NotionPageContentClientConfig<TItem>,
 ): NotionPageContentClient {
   const storage = config.storage ?? createBrowserNotionStorage()
   const fetcher = config.fetch ?? globalThis.fetch
@@ -119,6 +139,8 @@ export function createNotionPageContentClient(
   const listeners = new Set<() => void>()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const flushQueues = new Map<string, Promise<void>>()
+  let attachmentQueue = Promise.resolve()
+  let collectionSubscription: { unsubscribe: () => void } | undefined
   const online = () =>
     config.isOnline?.() ??
     (typeof navigator === 'undefined' || navigator.onLine !== false)
@@ -209,6 +231,28 @@ export function createNotionPageContentClient(
     if (persisted.version === 1) await persist(next)
     notify()
   })()
+
+  const attachAvailablePages = (): Promise<void> => {
+    const run = async () => {
+      await initialization
+      const collection = config.collection
+      const schema = collection?.config.schema
+      if (!collection || !schema || disposed || !syncEnabled) return
+      for (const row of collection.values()) {
+        const key = schema.getKey(row)
+        const notionPageId = schema.getPageId(row)
+        const draft = records.get(key)
+        if (!notionPageId || !draft || draft.notionPageId !== null) continue
+        await client.attachPage(key, notionPageId)
+      }
+    }
+    const result = attachmentQueue.then(run, run)
+    attachmentQueue = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
 
   const requestJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
     const controller = new AbortController()
@@ -507,6 +551,7 @@ export function createNotionPageContentClient(
         })
         await persist(next)
       })
+      await attachAvailablePages()
     },
     async load(key, notionPageId) {
       await initialization
@@ -556,10 +601,13 @@ export function createNotionPageContentClient(
     },
     async attachPage(key, notionPageId) {
       await initialization
-      if (!records.has(key)) await client.createDraft(key)
-      await client.load(key, notionPageId)
-      const current = records.get(key)
-      if (current?.pending && current.status !== 'conflict') schedule(key, 0)
+      const createdDraft = !records.has(key)
+      if (createdDraft) await client.createDraft(key)
+      if (!createdDraft || records.get(key)?.notionPageId !== notionPageId) {
+        await client.load(key, notionPageId)
+      }
+      const attached = records.get(key)
+      if (attached?.pending && attached.status !== 'conflict') schedule(key, 0)
     },
     async update(key, markdown) {
       await initialization
@@ -601,6 +649,7 @@ export function createNotionPageContentClient(
     flush,
     async flushAll() {
       await initialization
+      await attachAvailablePages()
       const flushes: Array<Promise<void>> = []
       for (const record of records.values()) {
         if (
@@ -679,11 +728,17 @@ export function createNotionPageContentClient(
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', handleOnline)
       }
+      collectionSubscription?.unsubscribe()
     },
   }
 
+  collectionSubscription = config.collection?.subscribeChanges(() => {
+    void attachAvailablePages().catch(() => undefined)
+  })
+
   void initialization
     .then(() => {
+      void attachAvailablePages().catch(() => undefined)
       if (!disposed && syncEnabled && online()) {
         for (const record of records.values()) {
           if (

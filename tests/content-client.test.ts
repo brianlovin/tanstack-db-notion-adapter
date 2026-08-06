@@ -1,10 +1,13 @@
+import { createCollection } from '@tanstack/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createMemoryNotionStorage,
   createNotionPageContentClient,
+  notionCollectionOptions,
   type NotionPageContent,
   type NotionPageContentSnapshot,
 } from '../src/index.js'
+import { testSchema, testTodo } from './fixtures.js'
 
 function content(markdown: string): NotionPageContent {
   return {
@@ -222,6 +225,98 @@ describe('createNotionPageContentClient', () => {
       status: 'synced',
     })
     restored.cleanup()
+  })
+
+  it('attaches every offline draft when its collection row receives a page ID', async () => {
+    const storage = createMemoryNotionStorage()
+    let isOnline = false
+    let remoteRow = testTodo({ id: 'offline-note', title: 'Offline note' })
+    let remoteMarkdown = ''
+    let contentWrites = 0
+    const fetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      if (url.searchParams.get('action') === 'content') {
+        return Response.json(content(remoteMarkdown))
+      }
+      if (init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as {
+          type?: string
+          markdown?: string
+          mutations?: Array<{ value: typeof remoteRow }>
+        }
+        if (body.type === 'page_content') {
+          contentWrites += 1
+          remoteMarkdown = body.markdown ?? ''
+          return Response.json(content(remoteMarkdown))
+        }
+        remoteRow = {
+          ...body.mutations![0]!.value,
+          notionPageId: 'page-1',
+          notionUrl: 'https://notion.so/page-1',
+        }
+        return Response.json({ rows: [remoteRow], deletedKeys: [] })
+      }
+      return Response.json({
+        rows: remoteRow.notionPageId ? [remoteRow] : [],
+        hasMore: false,
+        nextCursor: null,
+      })
+    })
+    const createRows = () =>
+      createCollection(
+        notionCollectionOptions({
+          id: 'offline-note-rows',
+          endpoint: 'http://app.test/api/notes',
+          schema: testSchema,
+          storage,
+          fetch: fetch as typeof globalThis.fetch,
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        }),
+      )
+    const createContent = (collection: ReturnType<typeof createRows>) =>
+      createNotionPageContentClient({
+        id: 'offline-note-content',
+        endpoint: 'http://app.test/api/notes',
+        collection,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => isOnline,
+        debounceMs: 1,
+      })
+
+    const offlineRows = createRows()
+    const offlineContent = createContent(offlineRows)
+    await offlineRows.preload()
+    await offlineContent.createDraft('offline-note', '# Written offline')
+    const transaction = offlineRows.insert({
+      id: 'offline-note',
+      title: 'Offline note',
+    })
+    await transaction.isPersisted.promise
+    offlineContent.cleanup()
+    await offlineRows.cleanup()
+
+    isOnline = true
+    const restoredRows = createRows()
+    const restoredContent = createContent(restoredRows)
+    await restoredRows.preload()
+    await restoredRows.utils.resumeSync()
+
+    await vi.waitFor(() => {
+      expect(restoredContent.get('offline-note')).toMatchObject({
+        notionPageId: 'page-1',
+        markdown: '# Written offline',
+        pending: false,
+        status: 'synced',
+      })
+    })
+    expect(contentWrites).toBe(1)
+    expect(remoteMarkdown).toBe('# Written offline')
+    restoredContent.cleanup()
+    await restoredRows.cleanup()
   })
 
   it('keeps a new offline row draft under its client key until Notion assigns a page', async () => {

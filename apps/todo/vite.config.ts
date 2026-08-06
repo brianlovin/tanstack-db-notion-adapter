@@ -55,7 +55,7 @@ export default defineConfig(({ mode }) => {
       },
     ],
     resolve: {
-      dedupe: ["@tanstack/db", "@tanstack/react-db"],
+      dedupe: ["@tanstack/db", "@tanstack/react-db", "react", "react-dom"],
     },
     server: { port: 5174 },
     test: {
