@@ -154,7 +154,12 @@ ul {
   grid-template-columns: 20px minmax(120px, 1fr) 82px 130px 24px 24px;
   align-items: center;
   gap: 8px;
-  border-bottom: 1px solid #f1f1ef;
+  padding: 0 6px;
+  border-radius: 4px;
+}
+
+.todo:hover {
+  background: #f7f7f5;
 }
 
 .todo > input[type="checkbox"] {

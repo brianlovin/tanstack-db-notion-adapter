@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { useEffect, useSyncExternalStore } from 'react'
 import type {
   NotionCollectionUtils,
   NotionSyncState,
@@ -42,9 +42,14 @@ export function useNotionPageContent(
   client: NotionPageContentClient,
   key: string | null,
 ): NotionPageContentSnapshot | undefined {
-  return useSyncExternalStore(
+  const snapshot = useSyncExternalStore(
     client.subscribe,
     () => (key ? client.get(key) : undefined),
     () => undefined,
   )
+  useEffect(() => {
+    if (!key) return
+    return client.watch(key)
+  }, [client, key])
+  return snapshot
 }

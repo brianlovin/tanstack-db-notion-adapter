@@ -22,8 +22,10 @@ Configure the same `NotionInvalidationStore` and scope on the sync and webhook
 handlers. The webhook handler validates its one-time verification token when
 configured and deduplicates event IDs through the store. Browser collections
 poll only the cheap invalidation version via `invalidationPollIntervalMs`, then
-refresh data when it changes. Keep a slower full poll as recovery because
-webhook delivery is not a durability boundary.
+refresh data when it changes. Page-content clients use the same option but
+revalidate only bodies currently watched by the UI. Keep slower periodic and
+focus revalidation as recovery because webhook delivery is not a durability
+boundary.
 
 The memory store is for one process. Production needs shared durable versions
 and event-ID deduplication.

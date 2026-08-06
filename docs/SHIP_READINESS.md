@@ -213,6 +213,9 @@ integration gaps:
   client-only dynamic wrapper.
 - [x] Document polling defaults and the current optional-field limitation of
   TanStack DB update drafts.
+- [x] Revalidate only actively watched page bodies on focus, a conservative
+  timer, or webhook invalidation so direct Notion edits appear without an N+1
+  content crawl.
 
 ## Test program
 
@@ -315,7 +318,7 @@ On narrow screens the panes become separate views with a Back control.
   lost responses, remote edits, content pagination, and large pages.
 - [x] Validate the page-content primitive with unit tests for durability,
   debounce/coalescing, lost responses, cleanup, and conflicts plus a real-Notion
-  Daylight create/edit/reload journey.
+  create/edit/reload journey.
 
 ### Reliability Lab
 
@@ -340,7 +343,11 @@ On narrow screens the panes become separate views with a Back control.
 - [x] Verify desktop and mobile layouts, the read-only `405` boundary, unit
   tests, lint, and the production Next.js build.
 
-### Daylight standalone Todo application
+### Historical production Todo acceptance sprint
+
+This larger standalone harness was removed after validation so `examples/todos`
+remains the repository's single Todo app. Its implementation and browser-test
+history remain available in Git.
 
 - [x] Scaffold a standalone Vite+ PWA with its pinned managed toolchain.
 - [x] Connect the checked-in generated schema to a real existing Todo data
@@ -389,14 +396,14 @@ On narrow screens the panes become separate views with a Back control.
   personal and small-team applications where instant optimistic writes and
   offline continuity matter. Public, read-heavy, slow-changing sites are not
   the primary optimization target.
-- **2026-08-04:** Use an eager mutable collection for Daylight so every task
-  view stays instant and available offline. Virtualize rendering rather than
-  weakening the local data model with mutable partial snapshots.
-- **2026-08-04:** A previously unlocked device may open Daylight's local cache
-  after a network-level session failure. A real HTTP authorization rejection
-  always locks the app, and the privacy implication is documented.
-- **2026-08-04:** Daylight's SQLite idempotency store is a production recipe for
-  one durable host, not a distributed default. The package keeps storage,
+- **2026-08-04:** Use an eager mutable collection for the Todo acceptance app so
+  every task view stays instant and available offline. Virtualize rendering
+  rather than weakening the local data model with mutable partial snapshots.
+- **2026-08-04:** A previously unlocked device may open the Todo app's local
+  cache after a network-level session failure. A real HTTP authorization
+  rejection always locks the app, and the privacy implication is documented.
+- **2026-08-04:** The Todo app's SQLite idempotency store is a production recipe
+  for one durable host, not a distributed default. The package keeps storage,
   limiter, and invalidation backends pluggable.
 - **2026-08-06:** Authenticated apps may hydrate immediately but can defer all
   automatic collection and page-content requests with `autoStart: false`, then

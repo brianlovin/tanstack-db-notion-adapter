@@ -24,9 +24,6 @@
         "skills/tanstack-db-notion/scripts/*.mjs",
         "examples/**/*.{ts,tsx}"
       ]
-    },
-    "apps/todo": {
-      "project": ["src/**/*.{ts,tsx}", "server/**/*.ts", "*.ts"]
     }
   }
 }

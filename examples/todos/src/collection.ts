@@ -1,6 +1,6 @@
 import { BTreeIndex, createCollection } from '@tanstack/react-db'
 import { notionCollectionOptions } from 'tanstack-db-notion-adapter'
-import { todoSchema } from './todo-schema.generated'
+import { todoSchema } from './notion.generated'
 
 export const todoCollection = createCollection(
   notionCollectionOptions({
@@ -9,6 +9,5 @@ export const todoCollection = createCollection(
     schema: todoSchema,
     autoIndex: 'eager',
     defaultIndexType: BTreeIndex,
-    pollIntervalMs: 60_000,
   }),
 )

@@ -1,34 +1,15 @@
-import { useMemo, useState, useSyncExternalStore, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { eq, useLiveQuery } from '@tanstack/react-db'
-import type { NotionSyncState } from 'tanstack-db-notion-adapter'
+import { useNotionSyncState } from 'tanstack-db-notion-adapter/react'
 import { todoCollection } from './collection'
 import type {
   TodoSchemaInput,
   TodoSchemaRow,
-} from './todo-schema.generated'
+} from './notion.generated'
 
 type Filter = 'open' | 'all' | 'done'
 
 const priorities = ['Low', 'Medium', 'High'] as const
-const syncFallback: NotionSyncState = {
-  status: 'idle',
-  pendingMutations: 0,
-  lastSyncedAt: null,
-  remoteVersion: null,
-  isOnline: true,
-  storage: 'memory',
-  error: null,
-  quarantine: null,
-}
-
-function useSyncState(): NotionSyncState {
-  return useSyncExternalStore(
-    todoCollection.utils.subscribeSyncState,
-    todoCollection.utils.getSyncState,
-    () => syncFallback,
-  )
-}
-
 function AddTodo() {
   const [title, setTitle] = useState('')
 
@@ -115,7 +96,7 @@ function TodoRow({ todo }: { todo: TodoSchemaRow }) {
 export function App() {
   const [filter, setFilter] = useState<Filter>('open')
   const [limit, setLimit] = useState(20)
-  const sync = useSyncState()
+  const sync = useNotionSyncState(todoCollection)
   const { data: allTodos = [], isLoading } = useLiveQuery((query) =>
     query.from({ todo: todoCollection }),
   )

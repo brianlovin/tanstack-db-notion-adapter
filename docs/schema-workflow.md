@@ -22,23 +22,25 @@ name collisions, duplicate Notion names, and duplicate stable property IDs.
 
 ## Connect an existing source
 
-Pass an exact data source ID, a single-source database ID, or paste the Notion
-database URL directly into `--id`. The CLI resolves the concrete source and
-writes it to the manifest:
+Run the interactive setup from the project root:
 
 ```sh
-npx tanstack-db-notion init \
-  --env .env \
-  --id "https://app.notion.com/p/workspace/..." \
-  --manifest notion.schema.json \
-  --out src/notion.generated.ts \
-  --name projectSchema
+npx tanstack-db-notion init
 ```
 
+The CLI automatically loads `.env.local` and `.env`. When credentials are
+missing, `init` asks for a PAT and exact data-source ID, single-source database
+ID, or pasted Notion database URL. Prompted credentials are stored in the
+gitignored `.env.local`; the concrete source ID is also written to the manifest.
+
+The default outputs are `notion.schema.json` and `src/notion.generated.ts`.
+`--env`, `--manifest`, `--out`, `--id`, and `--name` remain available for
+monorepos or custom layouts.
+
 `doctor` is read-only. `init` inspects the source, writes the initial manifest,
-and generates both `ProjectSchemaInput` and `ProjectSchemaRow`. Input omits
-read-only Notion fields; row includes them. Review raw or unsupported fields in
-the [property matrix](./PROPERTY_SUPPORT.md) before building mutations.
+and generates input and row types. Input omits read-only Notion fields; row
+includes them. Review raw or unsupported fields in the
+[property matrix](./PROPERTY_SUPPORT.md) before building mutations.
 
 A database ID or URL is accepted only when it resolves to one source. If a
 database has several sources, the CLI lists their names and IDs and stops
@@ -50,15 +52,10 @@ for server setup.
 Edit the manifest and follow one repeatable loop:
 
 ```sh
-npx tanstack-db-notion generate \
-  --manifest notion.schema.json \
-  --out src/notion.generated.ts
-npx tanstack-db-notion push --dry-run \
-  --env .env --manifest notion.schema.json
-npx tanstack-db-notion push \
-  --env .env --manifest notion.schema.json \
-  --out src/notion.generated.ts
-npx tanstack-db-notion check --env .env --manifest notion.schema.json
+npx tanstack-db-notion generate
+npx tanstack-db-notion push --dry-run
+npx tanstack-db-notion push
+npx tanstack-db-notion check
 ```
 
 `push --dry-run` is inert. A real push applies supported additions and renames,
@@ -79,10 +76,8 @@ atomic replacement.
 When a person changes the data source in Notion, inspect and merge it:
 
 ```sh
-npx tanstack-db-notion pull \
-  --env .env --manifest notion.schema.json \
-  --out src/notion.generated.ts
-npx tanstack-db-notion check --env .env --manifest notion.schema.json
+npx tanstack-db-notion pull
+npx tanstack-db-notion check
 ```
 
 Review the manifest diff. Stable IDs distinguish a rename from a delete plus

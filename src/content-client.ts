@@ -1,4 +1,8 @@
-import type { NotionErrorBody, NotionPageContent } from './protocol.js'
+import type {
+  NotionErrorBody,
+  NotionInvalidationVersion,
+  NotionPageContent,
+} from './protocol.js'
 import {
   createBrowserNotionStorage,
   NotionSyncError,
@@ -57,6 +61,12 @@ export interface NotionPageContentClientConfig<
   debounceMs?: number
   /** Abort a content request after this interval. @default 30000 */
   requestTimeoutMs?: number
+  /** Refresh watched page bodies at this interval. Set to 0 to disable. @default 60000 */
+  pollIntervalMs?: number
+  /** Refresh watched page bodies when the app window regains focus. @default true */
+  refreshOnWindowFocus?: boolean
+  /** Poll webhook invalidation state and refresh watched pages when it changes. @default 0 */
+  invalidationPollIntervalMs?: number
   isOnline?: () => boolean
   /** Wait for authentication before automatically flushing pending drafts. */
   autoStart?: boolean
@@ -75,6 +85,10 @@ export interface NotionPageContentClient {
   load: (key: string, notionPageId: string) => Promise<NotionPageContentSnapshot>
   /** Creates a missing draft, loads the page, and schedules pending content. */
   attachPage: (key: string, notionPageId: string) => Promise<void>
+  /** Revalidates one attached page body against Notion. */
+  refresh: (key: string) => Promise<NotionPageContentSnapshot>
+  /** Marks a page as active for focus, polling, and webhook revalidation. */
+  watch: (key: string) => () => void
   update: (key: string, markdown: string) => Promise<void>
   flush: (key: string) => Promise<void>
   flushAll: () => Promise<void>
@@ -136,11 +150,21 @@ export function createNotionPageContentClient<
   const storageId = `${config.id}:page-content`
   const debounceMs = Math.max(0, config.debounceMs ?? 750)
   const requestTimeoutMs = Math.max(1, config.requestTimeoutMs ?? 30_000)
+  const pollIntervalMs = Math.max(0, config.pollIntervalMs ?? 60_000)
+  const invalidationPollIntervalMs = Math.max(
+    0,
+    config.invalidationPollIntervalMs ?? 0,
+  )
   const listeners = new Set<() => void>()
+  const watchedKeys = new Map<string, number>()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const flushQueues = new Map<string, Promise<void>>()
   let attachmentQueue = Promise.resolve()
+  let refreshQueue = Promise.resolve()
   let collectionSubscription: { unsubscribe: () => void } | undefined
+  let pollInterval: ReturnType<typeof setInterval> | undefined
+  let invalidationInterval: ReturnType<typeof setInterval> | undefined
+  let invalidationVersion: number | null = null
   const online = () =>
     config.isOnline?.() ??
     (typeof navigator === 'undefined' || navigator.onLine !== false)
@@ -300,6 +324,47 @@ export function createNotionPageContentClient<
     url.searchParams.set('action', 'content')
     url.searchParams.set('pageId', notionPageId)
     return requestJson<NotionPageContent>(url.toString())
+  }
+
+  const refreshWatched = (): Promise<void> => {
+    const run = async () => {
+      await initialization
+      if (disposed || !syncEnabled || !online()) return
+      for (const key of watchedKeys.keys()) {
+        const record = records.get(key)
+        if (
+          !record?.notionPageId ||
+          record.pending ||
+          record.status === 'conflict' ||
+          record.status === 'loading' ||
+          record.status === 'syncing'
+        ) {
+          continue
+        }
+        await client.refresh(key).catch(() => undefined)
+      }
+    }
+    const result = refreshQueue.then(run, run)
+    refreshQueue = result.then(
+      () => undefined,
+      () => undefined,
+    )
+    return result
+  }
+
+  const checkForRemoteChanges = async (): Promise<void> => {
+    if (disposed || !syncEnabled || !online()) return
+    const url = new URL(endpoint, globalThis.location?.href ?? 'http://localhost')
+    url.searchParams.set('action', 'version')
+    const current = await requestJson<NotionInvalidationVersion>(url.toString())
+    if (invalidationVersion === null) {
+      invalidationVersion = current.version
+      await refreshWatched()
+      return
+    }
+    if (current.version === invalidationVersion) return
+    invalidationVersion = current.version
+    await refreshWatched()
   }
 
   const schedule = (key: string, delay = debounceMs) => {
@@ -502,11 +567,30 @@ export function createNotionPageContentClient<
   }
 
   const handleOnline = () => {
-    if (syncEnabled) void client.flushAll().catch(() => undefined)
+    if (!syncEnabled) return
+    void client
+      .flushAll()
+      .then(refreshWatched)
+      .catch(() => undefined)
+  }
+
+  const handleFocus = () => {
+    void refreshWatched().catch(() => undefined)
   }
 
   if (typeof window !== 'undefined') {
     window.addEventListener('online', handleOnline)
+    if (config.refreshOnWindowFocus !== false) {
+      window.addEventListener('focus', handleFocus)
+    }
+    if (pollIntervalMs > 0) {
+      pollInterval = setInterval(handleFocus, pollIntervalMs)
+    }
+    if (invalidationPollIntervalMs > 0) {
+      invalidationInterval = setInterval(() => {
+        void checkForRemoteChanges().catch(() => undefined)
+      }, invalidationPollIntervalMs)
+    }
   }
 
   const client: NotionPageContentClient = {
@@ -517,6 +601,7 @@ export function createNotionPageContentClient<
     async resumeSync() {
       syncEnabled = true
       await client.flushAll()
+      await refreshWatched()
     },
     pauseSync() {
       syncEnabled = false
@@ -608,6 +693,34 @@ export function createNotionPageContentClient<
       }
       const attached = records.get(key)
       if (attached?.pending && attached.status !== 'conflict') schedule(key, 0)
+    },
+    async refresh(key) {
+      await initialization
+      const current = records.get(key)
+      if (!current?.notionPageId) {
+        throw new NotionSyncError({
+          code: 'content_not_attached',
+          message: 'Attach the page before refreshing its content.',
+          retryable: false,
+        })
+      }
+      if (!online()) return clone(current)
+      return mergeRemote(
+        key,
+        current.notionPageId,
+        await fetchRemote(current.notionPageId),
+      )
+    },
+    watch(key) {
+      watchedKeys.set(key, (watchedKeys.get(key) ?? 0) + 1)
+      let watching = true
+      return () => {
+        if (!watching) return
+        watching = false
+        const count = watchedKeys.get(key) ?? 0
+        if (count <= 1) watchedKeys.delete(key)
+        else watchedKeys.set(key, count - 1)
+      }
     },
     async update(key, markdown) {
       await initialization
@@ -724,9 +837,15 @@ export function createNotionPageContentClient<
       lifecycle.abort(new Error('The page-content client was disposed.'))
       for (const timer of timers.values()) clearTimeout(timer)
       timers.clear()
+      if (pollInterval) clearInterval(pollInterval)
+      if (invalidationInterval) clearInterval(invalidationInterval)
+      watchedKeys.clear()
       listeners.clear()
       if (typeof window !== 'undefined') {
         window.removeEventListener('online', handleOnline)
+        if (config.refreshOnWindowFocus !== false) {
+          window.removeEventListener('focus', handleFocus)
+        }
       }
       collectionSubscription?.unsubscribe()
     },

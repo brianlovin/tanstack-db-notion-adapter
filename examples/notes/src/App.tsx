@@ -10,7 +10,7 @@ import { noteContent } from './content'
 import type {
   NoteSchemaInput,
   NoteSchemaRow,
-} from './note-schema.generated'
+} from './notion.generated'
 
 const noteKinds = ['Note', 'Journal'] as const
 const dateFormatter = new Intl.DateTimeFormat(undefined, {

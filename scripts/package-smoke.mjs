@@ -91,7 +91,10 @@ for (const [name, value] of Object.entries({ notion, notionCollectionOptions, cr
 
   const cli = join(temporaryRoot, 'node_modules', '.bin', 'tanstack-db-notion')
   const { stdout: cliHelp } = await run(cli, ['--help'])
-  if (!cliHelp.includes('push       Update Notion')) {
+  if (
+    !cliHelp.includes('push       Update Notion') ||
+    !cliHelp.includes('default: src/notion.generated.ts')
+  ) {
     throw new Error('Packed CLI did not print help.')
   }
   const { stdout: cliVersion } = await run(cli, ['--version'])
@@ -113,15 +116,21 @@ for (const [name, value] of Object.entries({ notion, notionCollectionOptions, cr
   if (manifestSchema.title !== 'TanStack DB Notion schema manifest') {
     throw new Error('Packed manifest JSON Schema is missing.')
   }
-  await access(
-    join(
-      temporaryRoot,
-      'node_modules',
-      'tanstack-db-notion-adapter',
-      'docs',
-      'sqlite-idempotency-store.ts',
-    ),
-  )
+  for (const file of [
+    'frameworks.md',
+    'page-content.md',
+    'sqlite-idempotency-store.ts',
+  ]) {
+    await access(
+      join(
+        temporaryRoot,
+        'node_modules',
+        'tanstack-db-notion-adapter',
+        'docs',
+        file,
+      ),
+    )
+  }
   try {
     await access(
       join(

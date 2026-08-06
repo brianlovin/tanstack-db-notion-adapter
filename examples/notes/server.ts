@@ -5,8 +5,9 @@ import {
   createNotionSyncHandler,
   resolveNotionDataSourceId,
 } from 'tanstack-db-notion-adapter/server'
-import { noteSchema } from './src/note-schema.generated'
+import { noteSchema } from './src/notion.generated'
 
+loadEnv({ path: new URL('.env.local', import.meta.url), quiet: true })
 loadEnv({ path: new URL('.env', import.meta.url), quiet: true })
 
 const app = new Hono()
@@ -38,7 +39,7 @@ if (token && configuredId) {
   }
 } else {
   configurationError =
-    'Set NOTION_PAT and either NOTION_DATA_SOURCE_ID or NOTION_DATABASE_ID in examples/notes/.env, then restart the Notes API server.'
+    'Run `npx tanstack-db-notion init` in examples/notes, then restart the Notes API server.'
 }
 
 if (configurationError) {

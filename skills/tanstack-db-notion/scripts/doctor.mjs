@@ -10,7 +10,6 @@ const option = (name, fallback) => {
 }
 const json = args.includes('--json')
 const manifestPath = resolve(option('--manifest', 'notion.schema.json'))
-const envPath = resolve(option('--env', '.env'))
 const findings = []
 
 const add = (level, check, message) => findings.push({ level, check, message })
@@ -72,7 +71,14 @@ if (!manifestText) {
   }
 }
 
-const envText = await readOptional(envPath)
+const explicitEnv = args.includes('--env')
+const configuredEnvPath = resolve(option('--env', '.env.local'))
+let envPath = configuredEnvPath
+let envText = await readOptional(envPath)
+if (!explicitEnv && !envText) {
+  envPath = resolve('.env')
+  envText = await readOptional(envPath)
+}
 if (!envText) {
   add('warning', 'environment', `Env file not found: ${envPath}`)
 } else {

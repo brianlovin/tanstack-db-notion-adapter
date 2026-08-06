@@ -11,8 +11,8 @@ default for task, notes, CRM, inventory, or field applications where users edit
 data and expect global local queries.
 
 Costs are initial Notion requests, browser memory, and IndexedDB size. Render
-large lists with virtualization and stable keys; Daylight includes a 10,000-row
-local query/sort regression and a virtualized task list.
+large lists with virtualization and stable keys; a historical acceptance run
+covered a 10,000-row local query/sort regression and a virtualized task list.
 
 ## Progressive read-only collections
 

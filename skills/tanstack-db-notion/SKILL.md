@@ -15,8 +15,7 @@ acknowledgement guarantees.
 2. Run the package CLI's read-only doctor when available:
 
    ```sh
-   npx tanstack-db-notion doctor \
-     --manifest notion.schema.json --env .env
+   npx tanstack-db-notion doctor
    ```
 
    The skill's `scripts/doctor.mjs` is a fallback for older installed releases.
@@ -36,20 +35,17 @@ file is a connection mechanism, not a schema source.
 For an existing data source, introspect it:
 
 ```sh
-npx tanstack-db-notion init \
-  --env .env \
-  --id "https://app.notion.com/p/workspace/..." \
-  --manifest notion.schema.json \
-  --out src/notion.generated.ts \
-  --name projectSchema
+npx tanstack-db-notion init
 ```
+
+The CLI loads `.env.local` and `.env`, prompts for missing credentials, and
+uses `notion.schema.json` plus `src/notion.generated.ts` by convention. Use
+flags only when the repository layout requires an override.
 
 For a code-first project, create or edit the checked-in manifest and generate:
 
 ```sh
-npx tanstack-db-notion generate \
-  --manifest notion.schema.json \
-  --out src/notion.generated.ts
+npx tanstack-db-notion generate
 ```
 
 Treat the manifest as authored source and the generated TypeScript file as
@@ -68,8 +64,7 @@ Use `resolveNotionDataSourceId()` for the same resolution in server setup.
 3. Preview remote changes:
 
    ```sh
-   npx tanstack-db-notion push --dry-run \
-     --env .env --manifest notion.schema.json
+   npx tanstack-db-notion push --dry-run
    ```
 
 4. Explain the exact additions, renames, removals, or type changes.
@@ -152,8 +147,11 @@ For an existing row, call `content.attachPage(row.id, row.notionPageId)` on
 demand. Use `content.flush(id)` as save-now or explicit retry. If the collection
 is omitted, the host must attach every pending draft itself.
 
-Do not eagerly fetch every page body. Refuse lossy replacement when Notion
-reports truncation or unknown blocks.
+The React content hook watches the open page. Watched bodies revalidate on
+window focus and a 60-second poll by default; optional webhook invalidation can
+reduce latency. Do not poll or eagerly load every page body.
+
+Refuse lossy replacement when Notion reports truncation or unknown blocks.
 
 ## Verify before handoff
 
@@ -172,8 +170,6 @@ unauthorized, malformed, oversized, timed-out, and sanitized failures. Report
 unsupported property types, remaining drift, local-memory fallback, ambiguous
 data sources, and any skipped live Notion test.
 
-For a production-shaped personal app, inspect `apps/todo` in the adapter
-repository. It demonstrates auth, same-origin writes, durable SQLite
-idempotency, a PWA shell, virtualized lists, offline session policy, page-body
-notes, and visible outbox recovery. Do not copy its single-host stores into a
-distributed deployment without replacing them.
+Use `examples/todos` for the smallest property-sync reference and
+`examples/notes` for page bodies. Production applications must still add auth,
+a durable idempotency store, and their own app-shell caching policy.

@@ -20,6 +20,7 @@ function content(markdown: string): NotionPageContent {
 
 afterEach(() => {
   vi.useRealTimers()
+  vi.unstubAllGlobals()
 })
 
 describe('createNotionPageContentClient', () => {
@@ -225,6 +226,68 @@ describe('createNotionPageContentClient', () => {
       status: 'synced',
     })
     restored.cleanup()
+  })
+
+  it('revalidates watched page content when the app regains focus', async () => {
+    const browserWindow = new EventTarget()
+    vi.stubGlobal('window', browserWindow)
+    let remoteMarkdown = 'Original'
+    const client = createNotionPageContentClient({
+      id: 'focused-content',
+      endpoint: 'http://app.test/api/notes',
+      storage: createMemoryNotionStorage(),
+      fetch: vi.fn(async () => Response.json(content(remoteMarkdown))),
+      isOnline: () => true,
+      pollIntervalMs: 0,
+    })
+
+    await client.load('note-1', 'page-1')
+    const unwatch = client.watch('note-1')
+    remoteMarkdown = 'Edited in Notion'
+    browserWindow.dispatchEvent(new Event('focus'))
+
+    await vi.waitFor(() => {
+      expect(client.get('note-1')?.markdown).toBe('Edited in Notion')
+    })
+    unwatch()
+    client.cleanup()
+  })
+
+  it('revalidates watched content after a webhook invalidation version changes', async () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('window', new EventTarget())
+    let version = 0
+    let remoteMarkdown = 'Original'
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      return Response.json(
+        url.searchParams.get('action') === 'version'
+          ? { version }
+          : content(remoteMarkdown),
+      )
+    })
+    const client = createNotionPageContentClient({
+      id: 'invalidated-content',
+      endpoint: 'http://app.test/api/notes',
+      storage: createMemoryNotionStorage(),
+      fetch: fetch as typeof globalThis.fetch,
+      isOnline: () => true,
+      pollIntervalMs: 0,
+      invalidationPollIntervalMs: 10,
+    })
+
+    await client.load('note-1', 'page-1')
+    const unwatch = client.watch('note-1')
+    await vi.advanceTimersByTimeAsync(10)
+    version = 1
+    remoteMarkdown = 'Changed after webhook'
+    await vi.advanceTimersByTimeAsync(10)
+
+    expect(client.get('note-1')?.markdown).toBe('Changed after webhook')
+    unwatch()
+    client.cleanup()
   })
 
   it('attaches every offline draft when its collection row receives a page ID', async () => {

@@ -65,6 +65,10 @@ debounces only the remote flush. Each page has one in-flight request; a newer
 revision remains pending and sends after the response. The server compares the
 draft base to current remote Markdown and retains both versions on conflict.
 
+The UI explicitly watches open page bodies. Only those bodies revalidate on
+window focus, a conservative periodic timer, or webhook invalidation; unopened
+pages never create an eager N+1 content crawl.
+
 ## Known seams
 
 Applications must supply the vendor-specific durable idempotency store and a

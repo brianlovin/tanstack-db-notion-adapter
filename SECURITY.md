@@ -46,10 +46,10 @@ If durable browser storage is unavailable, the default storage rejects writes.
 Memory fallback is opt-in and can lose edits on reload.
 
 An application may remember that a device was previously authenticated so its
-PWA can open offline, as Daylight does. That is an application policy rather
-than an adapter feature: document it clearly, never retain the password, honor
-an explicit server rejection, and clear the marker plus account-scoped caches
-when identities change.
+app shell can open offline through a service worker. That is an application
+policy rather than an adapter feature: document it clearly, never retain the
+password, honor an explicit server rejection, and clear the marker plus
+account-scoped caches when identities change.
 
 ## Reporting a vulnerability
 

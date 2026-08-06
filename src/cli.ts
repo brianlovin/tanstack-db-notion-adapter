@@ -4,6 +4,14 @@ import { existsSync } from 'node:fs'
 import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
 import { mkdir } from 'node:fs/promises'
+import { createInterface } from 'node:readline/promises'
+import { stdin, stdout } from 'node:process'
+import {
+  defaultGeneratedPath,
+  ignoreDefaultEnvFile,
+  loadCliEnvironment,
+  updateEnvFile,
+} from './cli-config.js'
 import {
   assertNotionSchemaManifest,
   createNotionSchemaManifest,
@@ -50,9 +58,9 @@ Commands:
   doctor     Validate config, connectivity, source selection, and schema drift
 
 Options:
-  --env <path>            Load PAT and IDs from an env file
+  --env <path>            Load PAT and IDs from an env file (default: .env.local, .env)
   --manifest <path>       Manifest path (default: notion.schema.json)
-  --out <path>            Generated TypeScript path
+  --out <path>            Generated TypeScript path (default: src/notion.generated.ts)
   --id <id-or-url>        Data source ID, database ID, or Notion database URL
   --name <exportName>     Generated schema export name
   --sync-key <name>       Stable rich-text key (default: Client ID)
@@ -173,18 +181,12 @@ async function packageVersion(): Promise<string> {
   return typeof packageJson.version === 'string' ? packageJson.version : 'unknown'
 }
 
-function defaultOutputPath(manifestPath: string): string {
-  return manifestPath.endsWith('.json')
-    ? manifestPath.slice(0, -'.json'.length) + '.generated.ts'
-    : `${manifestPath}.generated.ts`
-}
-
 async function writeGenerated(
   manifest: NotionSchemaManifest,
   manifestPath: string,
   outputPath?: string,
 ): Promise<string> {
-  const destination = outputPath ?? defaultOutputPath(manifestPath)
+  const destination = outputPath ?? defaultGeneratedPath(manifestPath)
   await mkdir(dirname(destination), { recursive: true })
   await atomicWriteFile(destination, generateNotionSchemaSource(manifest))
   return destination
@@ -208,25 +210,77 @@ async function writeManifest(
   await atomicWriteFile(path, `${JSON.stringify(manifest, null, 2)}\n`)
 }
 
-function credentials(
+interface CliCredentials {
+  token: string
+  id: string
+  promptedToken: boolean
+  promptedId: boolean
+}
+
+async function resolveCredentials(
   options: CliOptions,
   manifest?: NotionSchemaManifest,
-): { token: string; id: string } {
-  const token = process.env.NOTION_PAT ?? process.env.NOTION_TOKEN
-  const id =
+): Promise<CliCredentials> {
+  let token = process.env.NOTION_PAT ?? process.env.NOTION_TOKEN
+  let id =
     options.id ??
     process.env.NOTION_DATA_SOURCE_ID ??
     process.env.NOTION_DATABASE_ID ??
     manifest?.dataSourceId
+  let promptedToken = false
+  let promptedId = false
+
+  if (
+    (!token || !id) &&
+    options.command === 'init' &&
+    stdin.isTTY &&
+    stdout.isTTY
+  ) {
+    const prompt = createInterface({ input: stdin, output: stdout })
+    try {
+      if (!token) {
+        stdout.write('Notion PAT (saved to .env.local): ')
+        stdout.write('\u001B[8m')
+        try {
+          token = (await prompt.question('')).trim()
+        } finally {
+          stdout.write('\u001B[28m\n')
+        }
+        promptedToken = true
+      }
+      if (!id) {
+        id = (await prompt.question('Notion database URL or ID: ')).trim()
+        promptedId = true
+      }
+    } finally {
+      prompt.close()
+    }
+  }
+
   if (!token) {
     throw new Error('Set NOTION_PAT (or NOTION_TOKEN) before calling Notion.')
   }
   if (!id) {
     throw new Error(
-      'Set NOTION_DATA_SOURCE_ID or NOTION_DATABASE_ID, or pass --id with an ID or Notion URL.',
+      'Set NOTION_DATA_SOURCE_ID or NOTION_DATABASE_ID, or run init in an interactive terminal.',
     )
   }
-  return { token, id }
+  return { token, id, promptedToken, promptedId }
+}
+
+async function savePromptedCredentials(
+  options: CliOptions,
+  auth: CliCredentials,
+  dataSourceId: string,
+): Promise<void> {
+  if (!auth.promptedToken && !auth.promptedId) return
+  const path = options.envFile ?? resolve('.env.local')
+  await updateEnvFile(path, {
+    ...(auth.promptedToken ? { NOTION_PAT: auth.token } : {}),
+    NOTION_DATA_SOURCE_ID: dataSourceId,
+  })
+  if (!options.envFile) await ignoreDefaultEnvFile(path)
+  console.log(`Saved server credentials to ${path}`)
 }
 
 async function main(): Promise<void> {
@@ -247,8 +301,6 @@ async function main(): Promise<void> {
   if (options.dryRun && options.command !== 'push') {
     throw new Error('--dry-run is only valid with the push command.')
   }
-  if (options.envFile) process.loadEnvFile(options.envFile)
-
   if (options.command === 'generate') {
     const manifest = await readManifest(options.manifestPath)
     const output = await writeGenerated(
@@ -260,11 +312,17 @@ async function main(): Promise<void> {
     return
   }
 
+  loadCliEnvironment(options.envFile)
+
   const existing = existsSync(options.manifestPath)
     ? await readManifest(options.manifestPath)
     : undefined
-  const auth = credentials(options, existing)
+  const auth = await resolveCredentials(options, existing)
   const snapshot = await inspectNotionDataSource(auth)
+
+  if (options.command === 'init') {
+    await savePromptedCredentials(options, auth, snapshot.dataSourceId)
+  }
 
   if (options.command === 'doctor') {
     console.log(`Connected to ${snapshot.name ?? 'unnamed data source'}.`)

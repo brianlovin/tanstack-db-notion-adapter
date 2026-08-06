@@ -8,17 +8,10 @@ npm test
 npm run build
 npm run build:example
 npm run test:package
-
-cd apps/todo
-npm run check
-npm test
-npm run build
 ```
 
 Use `npm run dev` for Todos on ports 5173/8787 and `npm run dev:notes` for
-Notes on 5174/8788. Use `npm run dev` from `apps/todo` for Daylight on 5174 with
-its integrated local API. The scripts invoke the project-local Vite+ dependency;
-a global `vp` installation is optional. Daylight requires Node 22.13 or newer.
+Notes on 5174/8788.
 
 ## Ownership boundaries
 
@@ -28,8 +21,6 @@ a global `vp` installation is optional. Daylight requires Node 22.13 or newer.
 - `src/schema-tools.ts` / `src/cli.ts`: manifest workflow.
 - `src/content-client.ts`: lazy durable enhanced-Markdown page bodies.
 - `examples/`: acceptance examples, not package internals.
-- `apps/todo/`: standalone production acceptance app. Its server owns auth,
-  SQLite idempotency, static serving, and app-specific operational policy.
 
 Edit `notion.schema.json`, then regenerate `*-schema.generated.ts`. Do not
 hand-edit generated files. Preserve unrelated working-tree changes.
