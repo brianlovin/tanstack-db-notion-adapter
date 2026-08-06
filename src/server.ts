@@ -10,6 +10,7 @@ import type {
   NotionErrorBody,
   NotionListResult,
   NotionMutationBatch,
+  NotionMutationResult,
   NotionPageContent,
   NotionPageContentMutation,
   NotionSchemaMismatch,
@@ -1242,16 +1243,15 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
             retryable: false,
           })
         }
+        const versionBefore = config.invalidationStore
+          ? await config.invalidationStore.getVersion(invalidationScope)
+          : null
+        let result: NotionMutationResult<TItem>
         if (!idempotencyStore) {
-          const result = await applyBatch(body, request.signal)
-          await config.invalidationStore?.invalidate(
-            invalidationScope,
-            `mutation:${body.idempotencyKey}`,
-          )
-          return json(result)
-        }
-        try {
-          const result = await idempotencyStore.execute(
+          result = await applyBatch(body, request.signal)
+        } else {
+          try {
+            result = await idempotencyStore.execute(
               {
                 scope: `notion:${dataSourceId}:mutations`,
                 key: body.idempotencyKey,
@@ -1259,22 +1259,35 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
               },
               () => applyBatch(body, request.signal),
             )
-          await config.invalidationStore?.invalidate(
-            invalidationScope,
-            `mutation:${body.idempotencyKey}`,
-          )
-          return json(result)
-        } catch (error) {
-          if (error instanceof NotionIdempotencyConflictError) {
-            throw new NotionHttpError({
-              status: 409,
-              code: 'idempotency_key_reused',
-              message: error.message,
-              retryable: false,
-            })
+          } catch (error) {
+            if (error instanceof NotionIdempotencyConflictError) {
+              throw new NotionHttpError({
+                status: 409,
+                code: 'idempotency_key_reused',
+                message: error.message,
+                retryable: false,
+              })
+            }
+            throw error
           }
-          throw error
         }
+        const versionAfter = config.invalidationStore
+          ? await config.invalidationStore.invalidate(
+              invalidationScope,
+              `mutation:${body.idempotencyKey}`,
+            )
+          : null
+        return json({
+          ...result,
+          ...(versionBefore !== null && versionAfter !== null
+            ? {
+                invalidation: {
+                  versionBefore,
+                  versionAfter,
+                },
+              }
+            : {}),
+        })
       }
 
       return json(

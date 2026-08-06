@@ -1330,7 +1330,8 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     return result
   }
 
-  const flush = async (signal: AbortSignal) => {
+  const flush = async (signal: AbortSignal): Promise<boolean> => {
+    let requiresRefresh = false
     while (state.outbox.length > 0) {
       const entry = state.outbox[0]!
       let result: NotionMutationResult<TItem>
@@ -1362,6 +1363,18 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       const next = new Map(rows)
       for (const key of result.deletedKeys) next.delete(key)
       for (const row of result.rows) next.set(config.schema.getKey(row), row)
+      let remoteVersion = state.remoteVersion
+      if (result.invalidation) {
+        const { versionBefore, versionAfter } = result.invalidation
+        const isOwnContiguousChange =
+          remoteVersion === versionBefore &&
+          (versionAfter === versionBefore || versionAfter === versionBefore + 1)
+        if (remoteVersion === versionAfter || isOwnContiguousChange) {
+          remoteVersion = versionAfter
+        } else {
+          requiresRefresh = true
+        }
+      }
       const remainingOutbox = state.outbox.slice(1)
       for (const pending of remainingOutbox) {
         applyToMap(next, pending.batch.mutations)
@@ -1371,10 +1384,12 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           ...state,
           rows: [...next.values()],
           outbox: remainingOutbox,
+          remoteVersion,
         },
         next,
       )
     }
+    return requiresRefresh
   }
 
   const refresh = async (signal: AbortSignal) => {
@@ -1439,7 +1454,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     )
   }
 
-  const synchronize = (): Promise<void> =>
+  const synchronize = (reconcile = true): Promise<void> =>
     exclusive(async () => {
       await initialization
       if (disposed) return
@@ -1452,8 +1467,8 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       try {
         await crossTab(async (signal) => {
           await reload()
-          await flush(signal)
-          await refresh(signal)
+          const requiresRefresh = await flush(signal)
+          if (reconcile || requiresRefresh) await refresh(signal)
         })
         setSyncState({ status: 'synced', error: null })
       } catch (error) {
@@ -1596,7 +1611,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       }),
     )
 
-    if (syncEnabled && online()) void synchronize().catch(() => undefined)
+    if (syncEnabled && online()) void synchronize(false).catch(() => undefined)
   }
 
   const onInsert = async (params: InsertMutationFnParams<TItem, string>) => {

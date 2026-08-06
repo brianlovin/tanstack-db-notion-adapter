@@ -26,6 +26,15 @@ export interface NotionMutationBatch<TItem extends object> {
 export interface NotionMutationResult<TItem extends object> {
   rows: Array<TItem>
   deletedKeys: Array<string>
+  /**
+   * Version transition caused by this batch. A client may advance through this
+   * checkpoint only when it had already observed versionBefore and no other
+   * invalidation was interleaved with the mutation.
+   */
+  invalidation?: {
+    versionBefore: number
+    versionAfter: number
+  }
 }
 
 export interface NotionListResult<TItem extends object> {

@@ -25,6 +25,13 @@ row are one local checkpoint. If that checkpoint fails, the old durable head
 remains and is retried idempotently. Later pending mutations overlay the
 returned row so an older response cannot hide newer local intent.
 
+A successful write does not require a complete collection pull. With webhook
+invalidation enabled, the server returns the version observed before the batch
+and the version after recording the batch's event. The client advances through
+that checkpoint only when it had already observed the first version and the
+transition contains no interleaved event. A gap triggers reconciliation, so an
+unrelated remote edit cannot be acknowledged accidentally.
+
 Server handlers require a durable idempotency store or an explicit local-only
 escape hatch. Batch results and individual mutation results use separate keys.
 This prevents duplicates across handler instances, lost client responses, and

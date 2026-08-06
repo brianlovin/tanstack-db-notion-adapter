@@ -43,13 +43,18 @@ into at most 50-mutation batches, and committed to durable storage before the
 TanStack mutation handler resolves. The collection's synced base state changes
 only after that commit.
 
-Synchronization acquires Web Locks or a renewable IndexedDB lease, reloads
-shared storage, flushes the outbox head in FIFO order,
-then retrieves a complete paginated remote snapshot. Pending mutations overlay
-remote values. Both acknowledgement checkpoints and refreshed snapshots commit
-with an atomic revision comparison before they are published in memory. A stale
-writer retries rather than overwriting newer state. Unknown persisted formats
-move to quarantine; they are never silently replaced by an empty envelope.
+Synchronization acquires Web Locks or a renewable IndexedDB lease and reloads
+shared storage. The write path flushes the outbox head in FIFO order and applies
+the authoritative returned rows without rereading the collection. When webhook
+invalidation is configured, a mutation acknowledgement advances the local
+version only if no unrelated invalidation interleaved with the write; otherwise
+it reconciles before declaring the collection current. Focus, polling, explicit
+sync, and reconnect use the reconciliation path and retrieve the remote
+snapshot. Pending mutations overlay remote values. Both acknowledgement
+checkpoints and refreshed snapshots commit with an atomic revision comparison
+before they are published in memory. A stale writer retries rather than
+overwriting newer state. Unknown persisted formats move to quarantine; they are
+never silently replaced by an empty envelope.
 
 The server runs each batch and each individual mutation through a durable
 idempotency-store contract. The store is shared across handler instances and

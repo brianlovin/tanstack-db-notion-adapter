@@ -209,6 +209,47 @@ describe('createNotionSyncHandler', () => {
     expect(await invalidationStore.getVersion('source-1')).toBe(1)
   })
 
+  it('returns a causal invalidation checkpoint with mutation acknowledgements', async () => {
+    const notion = createFakeNotion()
+    const invalidationStore = createMemoryNotionInvalidationStore()
+    await invalidationStore.invalidate('source-1', 'remote-before-mutation')
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      authorize: () => true,
+      idempotencyStore: createMemoryNotionIdempotencyStore(),
+      invalidationStore,
+    })
+    const row = testTodo({ id: 'checkpointed-insert' })
+    const request = () =>
+      handler(
+        new Request('http://app.test/api/todos', {
+          method: 'POST',
+          body: JSON.stringify({
+            idempotencyKey: 'checkpointed-transaction',
+            mutations: [{ type: 'insert', key: row.id, value: row }],
+          }),
+        }),
+      )
+
+    const first = await request()
+    expect(first.status).toBe(200)
+    expect(await first.json()).toMatchObject({
+      invalidation: { versionBefore: 1, versionAfter: 2 },
+    })
+
+    const replay = await request()
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toMatchObject({
+      invalidation: { versionBefore: 2, versionAfter: 2 },
+    })
+    expect(notion.createCount).toBe(1)
+  })
+
   it('requires an explicit endpoint authorization policy', () => {
     expect(() =>
       createNotionSyncHandler({

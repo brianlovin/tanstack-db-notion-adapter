@@ -435,6 +435,138 @@ describe('notionCollectionOptions', () => {
     await collection.cleanup()
   })
 
+  it('acknowledges its own contiguous mutation without rereading the collection', async () => {
+    const storage = createMemoryNotionStorage()
+    let isOnline = false
+    let version = 0
+    let listRequests = 0
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          const created = testTodo({
+            id: 'causal-write',
+            title: 'Acknowledged by Notion',
+            notionPageId: 'page-causal-write',
+          })
+          const versionBefore = version
+          version += 1
+          return Response.json({
+            rows: [created],
+            deletedKeys: [],
+            invalidation: { versionBefore, versionAfter: version },
+          })
+        }
+        listRequests += 1
+        return Response.json({
+          rows: [],
+          hasMore: false,
+          nextCursor: null,
+          version,
+        })
+      },
+    )
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'causal-write-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => isOnline,
+        pollIntervalMs: 0,
+      }),
+    )
+
+    await collection.preload()
+    isOnline = true
+    await collection.utils.syncNow()
+    const transaction = collection.insert({
+      id: 'causal-write',
+      title: 'Local title',
+    })
+    await transaction.isPersisted.promise
+    await vi.waitFor(() => {
+      expect(collection.utils.getSyncState().pendingMutations).toBe(0)
+    })
+
+    expect(listRequests).toBe(1)
+    expect(collection.get('causal-write')).toMatchObject({
+      title: 'Acknowledged by Notion',
+      notionPageId: 'page-causal-write',
+    })
+    expect(collection.utils.getSyncState().remoteVersion).toBe(1)
+    expect(await storage.load('causal-write-todos')).toMatchObject({
+      remoteVersion: 1,
+    })
+    await collection.cleanup()
+  })
+
+  it('reconciles when another invalidation interleaves with a mutation', async () => {
+    const storage = createMemoryNotionStorage()
+    let isOnline = false
+    let listRequests = 0
+    const acknowledged = testTodo({
+      id: 'interleaved-write',
+      title: 'Acknowledged write',
+      notionPageId: 'page-interleaved-write',
+    })
+    const concurrent = testTodo({
+      id: 'concurrent-remote',
+      title: 'Changed concurrently',
+      notionPageId: 'page-concurrent-remote',
+    })
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return Response.json({
+            rows: [acknowledged],
+            deletedKeys: [],
+            invalidation: { versionBefore: 0, versionAfter: 2 },
+          })
+        }
+        listRequests += 1
+        return Response.json({
+          rows: listRequests === 1 ? [] : [acknowledged, concurrent],
+          hasMore: false,
+          nextCursor: null,
+          version: listRequests === 1 ? 0 : 2,
+        })
+      },
+    )
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'interleaved-write-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => isOnline,
+        pollIntervalMs: 0,
+      }),
+    )
+
+    await collection.preload()
+    isOnline = true
+    await collection.utils.syncNow()
+    const transaction = collection.insert({
+      id: 'interleaved-write',
+      title: 'Local write',
+    })
+    await transaction.isPersisted.promise
+    await vi.waitFor(() => {
+      expect(collection.utils.getSyncState()).toMatchObject({
+        pendingMutations: 0,
+        remoteVersion: 2,
+      })
+    })
+
+    expect(listRequests).toBe(2)
+    expect(collection.get('concurrent-remote')?.title).toBe(
+      'Changed concurrently',
+    )
+    await collection.cleanup()
+  })
+
   it('materializes every remote page before committing a read-only refresh', async () => {
     const storage = createMemoryNotionStorage()
     let isOnline = false
