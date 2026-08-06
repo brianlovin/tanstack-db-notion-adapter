@@ -1,31 +1,14 @@
 import {
   LATEST_NOTION_VERSION,
   resolveNotionDataSourceId,
-} from './server.js'
+} from './notion-source.js'
+import {
+  notionPropertyCapability,
+  type KnownNotionPropertyType,
+} from './property-capabilities.js'
 
 export type NotionDataSourcePropertyType =
-  | 'title'
-  | 'rich_text'
-  | 'number'
-  | 'select'
-  | 'multi_select'
-  | 'status'
-  | 'date'
-  | 'people'
-  | 'files'
-  | 'checkbox'
-  | 'url'
-  | 'email'
-  | 'phone_number'
-  | 'formula'
-  | 'relation'
-  | 'rollup'
-  | 'created_time'
-  | 'created_by'
-  | 'last_edited_time'
-  | 'last_edited_by'
-  | 'unique_id'
-  | 'place'
+  | KnownNotionPropertyType
   | (string & {})
 
 export interface NotionSchemaOption {
@@ -348,24 +331,6 @@ export interface DiffNotionSchemaOptions {
   includeRemoteAdditions?: boolean
 }
 
-const directlyManagedTypes = new Set<NotionDataSourcePropertyType>([
-  'rich_text',
-  'number',
-  'select',
-  'multi_select',
-  'date',
-  'people',
-  'files',
-  'checkbox',
-  'url',
-  'email',
-  'phone_number',
-  'created_time',
-  'created_by',
-  'last_edited_time',
-  'last_edited_by',
-])
-
 function plainText(value: unknown): string {
   if (!Array.isArray(value)) return ''
   return value
@@ -437,11 +402,7 @@ function propertyIdMatches(left: string, right: string): boolean {
 function manifestPropertyConfig(
   property: NotionDataSourcePropertySnapshot,
 ): Record<string, unknown> {
-  if (
-    property.type !== 'select' &&
-    property.type !== 'multi_select' &&
-    property.type !== 'status'
-  ) {
+  if (!notionPropertyCapability(property.type)?.hasOptions) {
     return property.config
   }
   const { options: _options, ...config } = property.config
@@ -500,12 +461,9 @@ export async function inspectNotionDataSource(
       configValue && typeof configValue === 'object'
         ? (configValue as Record<string, unknown>)
         : {}
-    const options =
-      property.type === 'select' ||
-      property.type === 'multi_select' ||
-      property.type === 'status'
-        ? parseOptions(propertyConfig)
-        : undefined
+    const options = notionPropertyCapability(property.type)?.hasOptions
+      ? parseOptions(propertyConfig)
+      : undefined
     properties.push({
       id: property.id,
       name:
@@ -665,6 +623,10 @@ function optionsSource(options: Array<NotionSchemaOption> | undefined): string {
 function propertySource(field: NotionManifestProperty): string {
   const property = referenceSource(field)
   const defaultValue = field.defaultValue
+  const capability = notionPropertyCapability(field.type)
+  if (!capability?.schemaBuilder) {
+    return `notion.raw(${property}, ${quote(field.type)})`
+  }
   switch (field.type) {
     case 'title':
       return `notion.title(${property})`
@@ -672,44 +634,14 @@ function propertySource(field: NotionManifestProperty): string {
       return `notion.richText(${property}${typeof defaultValue === 'string' ? `, ${quote(defaultValue)}` : ''})`
     case 'checkbox':
       return `notion.checkbox(${property}${typeof defaultValue === 'boolean' ? `, ${defaultValue}` : ''})`
-    case 'number':
-      return `notion.number(${property})`
     case 'select':
       return `notion.select(${property}, ${optionsSource(field.options)}${typeof defaultValue === 'string' || defaultValue === null ? `, ${quote(defaultValue)}` : ''})`
     case 'multi_select':
       return `notion.multiSelect(${property}, ${optionsSource(field.options)})`
-    case 'date':
-      return `notion.date(${property})`
-    case 'url':
-      return `notion.url(${property})`
-    case 'email':
-      return `notion.email(${property})`
-    case 'phone_number':
-      return `notion.phoneNumber(${property})`
     case 'status':
       return `notion.status(${property}, ${optionsSource(field.options)}${typeof defaultValue === 'string' || defaultValue === null ? `, ${quote(defaultValue)}` : ''})`
-    case 'people':
-      return `notion.people(${property})`
-    case 'files':
-      return `notion.files(${property})`
-    case 'formula':
-      return `notion.formula(${property})`
-    case 'relation':
-      return `notion.relation(${property})`
-    case 'rollup':
-      return `notion.rollup(${property})`
-    case 'created_by':
-      return `notion.createdBy(${property})`
-    case 'created_time':
-      return `notion.createdTime(${property})`
-    case 'last_edited_by':
-      return `notion.lastEditedBy(${property})`
-    case 'last_edited_time':
-      return `notion.lastEditedTime(${property})`
-    case 'unique_id':
-      return `notion.uniqueId(${property})`
     default:
-      return `notion.raw(${property}, ${quote(field.type)})`
+      return `notion.${capability.schemaBuilder}(${property})`
   }
 }
 
@@ -796,7 +728,8 @@ function findRemoteProperty(
 }
 
 function canManage(field: NotionManifestProperty): boolean {
-  return directlyManagedTypes.has(field.type) || field.type === 'title'
+  const capability = notionPropertyCapability(field.type)
+  return capability !== undefined && capability.schemaPush !== 'manual'
 }
 
 export function diffNotionSchema(
@@ -840,11 +773,7 @@ export function diffNotionSchema(
       })
       continue
     }
-    if (
-      field.type === 'select' ||
-      field.type === 'multi_select' ||
-      field.type === 'status'
-    ) {
+    if (notionPropertyCapability(field.type)?.hasOptions) {
       const desired = new Set((field.options ?? []).map((option) => option.name))
       const actual = new Set((remote.options ?? []).map((option) => option.name))
       const added = [...desired].filter((name) => !actual.has(name))

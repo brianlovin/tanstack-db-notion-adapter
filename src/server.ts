@@ -1,3 +1,20 @@
+import {
+  createMemoryNotionRateLimiter,
+  createNotionRequester,
+  NotionHttpError,
+  type NotionRateLimiter,
+  type NotionServerEvent,
+} from './notion-request.js'
+import { LATEST_NOTION_VERSION } from './notion-source.js'
+import type {
+  NotionErrorBody,
+  NotionListResult,
+  NotionMutationBatch,
+  NotionPageContent,
+  NotionPageContentMutation,
+  NotionSchemaMismatch,
+  NotionSchemaResult,
+} from './protocol.js'
 import { NotionSchemaError } from './schema.js'
 import type {
   InferNotionOutput,
@@ -5,20 +22,30 @@ import type {
   NotionPageLike,
   NotionSchema,
 } from './schema.js'
-import type {
-  NotionErrorBody,
-  NotionListResult,
-  NotionMutation,
-  NotionMutationBatch,
-  NotionMutationResult,
-  NotionPageContent,
-  NotionPageContentMutation,
-  NotionPropertyConflict,
-  NotionSchemaMismatch,
-  NotionSchemaResult,
-} from './protocol.js'
-
-export const LATEST_NOTION_VERSION = '2026-03-11'
+import {
+  createMemoryNotionIdempotencyStore,
+  createNotionMutationExecutor,
+  fingerprint,
+  NotionIdempotencyConflictError,
+  type NotionIdempotencyStore,
+} from './server-mutations.js'
+export {
+  createMemoryNotionIdempotencyStore,
+  NotionIdempotencyConflictError,
+  type NotionIdempotencyOperation,
+  type NotionIdempotencyStore,
+} from './server-mutations.js'
+export {
+  createMemoryNotionRateLimiter,
+  type NotionRateLimitOperation,
+  type NotionRateLimiter,
+  type NotionServerEvent,
+} from './notion-request.js'
+export {
+  LATEST_NOTION_VERSION,
+  resolveNotionDataSourceId,
+  type ResolveNotionDataSourceIdConfig,
+} from './notion-source.js'
 
 export type NotionSyncAuthorizationResult = boolean | Response
 
@@ -129,60 +156,6 @@ interface NotionSyncHandlerBaseConfig<TFields extends NotionFields> {
   maxRetries?: number
 }
 
-export interface NotionIdempotencyOperation {
-  /** Namespaces keys by data source and operation family. */
-  scope: string
-  /** Client-generated retry key. */
-  key: string
-  /** Stable request fingerprint; reuse with another payload must fail. */
-  fingerprint: string
-}
-
-export interface NotionIdempotencyStore {
-  /**
-   * Execute once and durably replay the result for the same key/fingerprint.
-   * Implementations must serialize concurrent callers across server instances,
-   * persist successful JSON-compatible results, and never cache failures.
-   */
-  execute: <T>(
-    operation: NotionIdempotencyOperation,
-    run: () => Promise<T>,
-  ) => Promise<T>
-}
-
-export interface NotionRateLimitOperation {
-  /** Non-secret identifier shared by every handler using one Notion connection. */
-  scope: string
-  minimumIntervalMs: number
-  signal?: AbortSignal
-}
-
-export interface NotionRateLimiter {
-  schedule: <T>(
-    operation: NotionRateLimitOperation,
-    run: () => Promise<T>,
-  ) => Promise<T>
-}
-
-export interface NotionServerEvent {
-  type: 'notion_request'
-  operation:
-    | 'data_source.retrieve'
-    | 'data_source.query'
-    | 'page.create'
-    | 'page.retrieve'
-    | 'page.update'
-    | 'page_property.retrieve'
-    | 'page_content.retrieve'
-    | 'page_content.update'
-    | 'unknown'
-  attempt: number
-  outcome: 'success' | 'retry' | 'error'
-  durationMs: number
-  status: number | null
-  retryInMs: number | null
-}
-
 export interface NotionInvalidationStore {
   getVersion: (scope: string) => Promise<number>
   /** Must deduplicate repeated event IDs before incrementing the version. */
@@ -217,92 +190,6 @@ export interface NotionWebhookHandlerConfig {
   /** Setup-only callback used to retain the one-time verification token. */
   onVerificationToken?: (token: string) => void | Promise<void>
   maxRequestBodyBytes?: number
-}
-
-/** Coordinates one or more handlers in the same JavaScript process. */
-export function createMemoryNotionRateLimiter(): NotionRateLimiter {
-  const queues = new Map<string, Promise<void>>()
-  const nextRequestAt = new Map<string, number>()
-  return {
-    async schedule<T>(operation: NotionRateLimitOperation, run: () => Promise<T>) {
-      const previous = queues.get(operation.scope) ?? Promise.resolve()
-      let release!: () => void
-      const current = new Promise<void>((resolve) => {
-        release = resolve
-      })
-      const queued = previous.then(() => current)
-      queues.set(operation.scope, queued)
-      await previous
-      try {
-        const delay = Math.max(
-          0,
-          (nextRequestAt.get(operation.scope) ?? 0) - Date.now(),
-        )
-        if (delay > 0) await sleep(delay, operation.signal)
-        nextRequestAt.set(
-          operation.scope,
-          Date.now() + operation.minimumIntervalMs,
-        )
-        return await run()
-      } finally {
-        release()
-        if (queues.get(operation.scope) === queued) queues.delete(operation.scope)
-      }
-    },
-  }
-}
-
-export class NotionIdempotencyConflictError extends Error {
-  constructor() {
-    super('An idempotency key was reused with a different request payload.')
-    this.name = 'NotionIdempotencyConflictError'
-  }
-}
-
-export function createMemoryNotionIdempotencyStore(): NotionIdempotencyStore {
-  const completed = new Map<string, { fingerprint: string; value: unknown }>()
-  const inFlight = new Map<
-    string,
-    { fingerprint: string; promise: Promise<unknown> }
-  >()
-
-  return {
-    async execute<T>(operation: NotionIdempotencyOperation, run: () => Promise<T>) {
-      const ledgerKey = `${operation.scope}:${operation.key}`
-      const existing = completed.get(ledgerKey)
-      if (existing) {
-        if (existing.fingerprint !== operation.fingerprint) {
-          throw new NotionIdempotencyConflictError()
-        }
-        return structuredClone(existing.value) as T
-      }
-      const pending = inFlight.get(ledgerKey)
-      if (pending) {
-        if (pending.fingerprint !== operation.fingerprint) {
-          throw new NotionIdempotencyConflictError()
-        }
-        return structuredClone(await pending.promise) as T
-      }
-
-      const promise = run().then((value) => {
-        const retained = structuredClone(value)
-        completed.set(ledgerKey, {
-          fingerprint: operation.fingerprint,
-          value: retained,
-        })
-        return retained
-      })
-      inFlight.set(ledgerKey, {
-        fingerprint: operation.fingerprint,
-        promise,
-      })
-      try {
-        return structuredClone(await promise) as T
-      } finally {
-        if (inFlight.get(ledgerKey)?.promise === promise) inFlight.delete(ledgerKey)
-      }
-    },
-  }
 }
 
 type NotionSyncAuthorizationPolicy =
@@ -345,15 +232,6 @@ export type NotionSyncHandlerConfig<TFields extends NotionFields> =
     NotionSyncAuthorizationPolicy &
     NotionSyncIdempotencyPolicy
 
-export interface ResolveNotionDataSourceIdConfig {
-  token: string
-  /** A data source ID, database ID, or pasted Notion database URL. */
-  id: string
-  notionVersion?: string
-  fetch?: typeof globalThis.fetch
-  baseUrl?: string
-}
-
 interface NotionListResponse {
   results?: Array<unknown>
   has_more?: boolean
@@ -383,64 +261,6 @@ interface NotionMarkdownResponse {
   unknown_block_ids?: unknown
 }
 
-interface NotionApiErrorResponse {
-  code?: string
-  message?: string
-}
-
-class NotionHttpError extends Error {
-  readonly status: number
-  readonly code: string
-  readonly retryable: boolean
-  readonly retryAfterMs: number | null
-  readonly conflicts: ReadonlyArray<NotionPropertyConflict>
-
-  constructor(options: {
-    status: number
-    code: string
-    message: string
-    retryable: boolean
-    retryAfterMs?: number | null
-    conflicts?: ReadonlyArray<NotionPropertyConflict>
-  }) {
-    super(options.message)
-    this.name = 'NotionHttpError'
-    this.status = options.status
-    this.code = options.code
-    this.retryable = options.retryable
-    this.retryAfterMs = options.retryAfterMs ?? null
-    this.conflicts = options.conflicts ?? []
-  }
-}
-
-function stableJson(value: unknown): string {
-  if (value === undefined) return 'undefined'
-  if (value === null || typeof value !== 'object') return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
-  return `{${Object.entries(value as Record<string, unknown>)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, entry]) => `${JSON.stringify(key)}:${stableJson(entry)}`)
-    .join(',')}}`
-}
-
-async function fingerprint(value: unknown): Promise<string> {
-  const serialized = stableJson(value)
-  if (!globalThis.crypto?.subtle) {
-    throw new Error('Web Crypto SHA-256 support is required for idempotency.')
-  }
-  const digest = await globalThis.crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(serialized),
-  )
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, '0'))
-    .join('')
-}
-
-function valuesEqual(left: unknown, right: unknown): boolean {
-  return stableJson(left) === stableJson(right)
-}
-
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -463,42 +283,6 @@ function isPage(value: unknown): value is NotionPageLike {
     !!page.properties &&
     typeof page.properties === 'object'
   )
-}
-
-function parseRetryAfter(response: Response): number | null {
-  const value = response.headers.get('Retry-After')
-  if (!value) return null
-  const seconds = Number(value)
-  return Number.isFinite(seconds) ? Math.max(0, seconds * 1_000) : null
-}
-
-function retryableStatus(status: number): boolean {
-  return status === 408 || status === 409 || status === 429 || status >= 500
-}
-
-function canRetryNotionRequest(
-  operation: NotionServerEvent['operation'],
-  error: unknown,
-): boolean {
-  if (operation !== 'page.create') {
-    return !(error instanceof NotionHttpError) || error.retryable
-  }
-  return error instanceof NotionHttpError && error.status === 429
-}
-
-function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) return Promise.reject(signal.reason)
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      signal?.removeEventListener('abort', handleAbort)
-      resolve()
-    }, milliseconds)
-    const handleAbort = () => {
-      clearTimeout(timeout)
-      reject(signal?.reason)
-    }
-    signal?.addEventListener('abort', handleAbort, { once: true })
-  })
 }
 
 function isMutationBatch<TItem extends object>(
@@ -794,102 +578,6 @@ function dataSourceProperty(
   return properties[name]
 }
 
-function notionObjectId(value: string): string {
-  const input = value.trim()
-  if (!/^https?:\/\//i.test(input)) return input
-
-  let url: URL
-  try {
-    url = new URL(input)
-  } catch {
-    throw new Error('The configured Notion URL is invalid.')
-  }
-  if (!/(^|\.)notion\.(com|so|site)$/i.test(url.hostname)) {
-    throw new Error(
-      'Expected a Notion database URL (notion.com, notion.so, or notion.site) or a bare database/data-source ID.',
-    )
-  }
-  const matches = url.pathname.match(
-    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}/gi,
-  )
-  const id = matches?.at(-1)
-  if (!id) {
-    throw new Error('Could not find a database ID in the Notion URL.')
-  }
-  return id
-}
-
-/**
- * Accepts a data source ID, single-source database ID, or pasted Notion URL and
- * returns the concrete data source ID required by Notion's data APIs.
- */
-export async function resolveNotionDataSourceId(
-  config: ResolveNotionDataSourceIdConfig,
-): Promise<string> {
-  const fetcher = config.fetch ?? globalThis.fetch
-  if (!fetcher) throw new Error('A fetch implementation is required.')
-
-  const baseUrl = (config.baseUrl ?? 'https://api.notion.com').replace(/\/$/, '')
-  const headers = {
-    Authorization: `Bearer ${config.token}`,
-    'Notion-Version': config.notionVersion ?? LATEST_NOTION_VERSION,
-    Accept: 'application/json',
-  }
-  const id = notionObjectId(config.id)
-  const encodedId = encodeURIComponent(id)
-  const dataSourceResponse = await fetcher(
-    `${baseUrl}/v1/data_sources/${encodedId}`,
-    { headers },
-  )
-  if (dataSourceResponse.ok) return id
-
-  const dataSourceError = (await dataSourceResponse.json().catch(() => ({}))) as
-    NotionApiErrorResponse
-  if (dataSourceResponse.status !== 404) {
-    throw new Error(
-      dataSourceError.message ??
-        `Notion could not retrieve the configured data source (HTTP ${dataSourceResponse.status}).`,
-    )
-  }
-
-  const databaseResponse = await fetcher(`${baseUrl}/v1/databases/${encodedId}`, {
-    headers,
-  })
-  const database = (await databaseResponse.json().catch(() => ({}))) as {
-    data_sources?: Array<{ id?: unknown; name?: unknown }>
-    message?: string
-  }
-  if (!databaseResponse.ok) {
-    throw new Error(
-      database.message ??
-        'The configured ID is neither an accessible data source nor database.',
-    )
-  }
-
-  const dataSources = (database.data_sources ?? []).filter(
-    (source): source is { id: string; name?: unknown } =>
-      typeof source.id === 'string',
-  )
-  if (dataSources.length === 0) {
-    throw new Error('The configured Notion database has no accessible data sources.')
-  }
-  if (dataSources.length > 1) {
-    const choices = dataSources
-      .map((source) => {
-        const name =
-          typeof source.name === 'string' && source.name.trim()
-            ? source.name.trim()
-            : 'Unnamed data source'
-        return `${name} (${source.id})`
-      })
-      .join(', ')
-    throw new Error(
-      `The configured Notion database has multiple data sources: ${choices}. Set NOTION_DATA_SOURCE_ID or pass --id with the exact source you want to sync.`,
-    )
-  }
-  return dataSources[0]!.id
-}
-
 /**
  * Creates a framework-neutral Request -> Response handler. Keep this handler on
  * the server: it is the only layer that receives the Notion token.
@@ -945,9 +633,6 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     config.schemaValidationTtlMs ?? 60_000,
   )
   const maxRetries = Math.max(0, Math.floor(config.maxRetries ?? 4))
-  const idDescriptor = config.schema.fields[config.schema.idField]!
-  const idPropertyName = idDescriptor.name ?? null
-  const idPropertyReference = idDescriptor.propertyId ?? idPropertyName
   const rateLimiter = config.rateLimiter ?? createMemoryNotionRateLimiter()
   if (config.rateLimiter && !config.rateLimitScope) {
     throw new Error(
@@ -1070,169 +755,18 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     return { property: sort.property, direction: sort.direction }
   })
 
-  const schedule = <T>(
-    operation: () => Promise<T>,
-    signal?: AbortSignal,
-  ): Promise<T> =>
-    rateLimiter.schedule(
-      {
-        scope: rateLimitScope,
-        minimumIntervalMs: minimumRequestIntervalMs,
-        ...(signal ? { signal } : {}),
-      },
-      operation,
-    )
-
-  const emit = (event: NotionServerEvent) => {
-    try {
-      config.onEvent?.(event)
-    } catch {
-      // Telemetry must never affect synchronization.
-    }
-  }
-
-  const requestOperation = (
-    path: string,
-    method: string,
-  ): NotionServerEvent['operation'] => {
-    if (/\/v1\/data_sources\/[^/]+\/query/.test(path)) {
-      return 'data_source.query'
-    }
-    if (/\/v1\/data_sources\/[^/]+/.test(path)) {
-      return 'data_source.retrieve'
-    }
-    if (/\/v1\/pages\/[^/]+\/properties\//.test(path)) {
-      return 'page_property.retrieve'
-    }
-    if (/\/v1\/pages\/[^/]+\/markdown/.test(path)) {
-      return method === 'PATCH'
-        ? 'page_content.update'
-        : 'page_content.retrieve'
-    }
-    if (path === '/v1/pages' && method === 'POST') return 'page.create'
-    if (/\/v1\/pages\/[^/]+/.test(path)) {
-      return method === 'PATCH' ? 'page.update' : 'page.retrieve'
-    }
-    return 'unknown'
-  }
-
-  const requestNotion = async <T>(
-    path: string,
-    init: RequestInit = {},
-  ): Promise<T> => {
-    for (let attempt = 0; ; attempt += 1) {
-      const startedAt = Date.now()
-      const method = init.method ?? 'GET'
-      const operation = requestOperation(path, method)
-      try {
-        const result = await schedule(async () => {
-          const headers = new Headers(init.headers)
-          headers.set('Authorization', `Bearer ${config.token}`)
-          headers.set('Notion-Version', version)
-          headers.set('Accept', 'application/json')
-          if (init.body) headers.set('Content-Type', 'application/json')
-
-          const controller = new AbortController()
-          let timedOut = false
-          const requestSignal = init.signal
-          const handleAbort = () => controller.abort(requestSignal?.reason)
-          if (requestSignal?.aborted) handleAbort()
-          else requestSignal?.addEventListener('abort', handleAbort, { once: true })
-          const timeout = setTimeout(() => {
-            timedOut = true
-            controller.abort(new Error('Notion request timed out.'))
-          }, requestTimeoutMs)
-
-          let response: Response
-          try {
-            response = await fetcher(`${baseUrl}${path}`, {
-              ...init,
-              headers,
-              signal: controller.signal,
-            })
-          } catch (error) {
-            if (timedOut) {
-              throw new NotionHttpError({
-                status: 504,
-                code: 'notion_request_timeout',
-                message: 'Notion did not respond before the request timeout.',
-                retryable: true,
-              })
-            }
-            if (init.signal?.aborted) {
-              throw new NotionHttpError({
-                status: 408,
-                code: 'request_cancelled',
-                message: 'The sync request was cancelled.',
-                retryable: false,
-              })
-            }
-            throw error
-          } finally {
-            clearTimeout(timeout)
-            requestSignal?.removeEventListener('abort', handleAbort)
-          }
-          const body = (await response.json().catch(() => ({}))) as
-            | T
-            | NotionApiErrorResponse
-
-          if (!response.ok) {
-            const error = body as NotionApiErrorResponse
-            throw new NotionHttpError({
-              status: response.status,
-              code: error.code ?? `http_${response.status}`,
-              message: `Notion rejected the request (${error.code ?? `HTTP ${response.status}`}).`,
-              retryable: retryableStatus(response.status),
-              retryAfterMs: parseRetryAfter(response),
-            })
-          }
-          return { body: body as T, status: response.status }
-        }, init.signal ?? undefined)
-        emit({
-          type: 'notion_request',
-          operation,
-          attempt: attempt + 1,
-          outcome: 'success',
-          durationMs: Date.now() - startedAt,
-          status: result.status,
-          retryInMs: null,
-        })
-        return result.body
-      } catch (error) {
-        const canRetry =
-          attempt < maxRetries &&
-          !init.signal?.aborted &&
-          canRetryNotionRequest(operation, error)
-        if (!canRetry) {
-          emit({
-            type: 'notion_request',
-            operation,
-            attempt: attempt + 1,
-            outcome: 'error',
-            durationMs: Date.now() - startedAt,
-            status: error instanceof NotionHttpError ? error.status : null,
-            retryInMs: null,
-          })
-          throw error
-        }
-
-        const retryAfter =
-          error instanceof NotionHttpError ? error.retryAfterMs : null
-        const exponential = Math.min(8_000, 300 * 2 ** attempt)
-        const backoff = retryAfter ?? exponential * (0.5 + Math.random())
-        emit({
-          type: 'notion_request',
-          operation,
-          attempt: attempt + 1,
-          outcome: 'retry',
-          durationMs: Date.now() - startedAt,
-          status: error instanceof NotionHttpError ? error.status : null,
-          retryInMs: backoff,
-        })
-        await sleep(backoff, init.signal ?? undefined)
-      }
-    }
-  }
+  const requestNotion = createNotionRequester({
+    token: config.token,
+    notionVersion: version,
+    baseUrl,
+    fetch: fetcher,
+    rateLimiter,
+    rateLimitScope,
+    minimumRequestIntervalMs,
+    requestTimeoutMs,
+    maxRetries,
+    ...(config.onEvent ? { onEvent: config.onEvent } : {}),
+  })
 
   const validateDataSource = async (
     signal?: AbortSignal,
@@ -1470,373 +1004,15 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     }
   }
 
-  const findPagesByKeys = async (
-    keys: ReadonlyArray<string>,
-    signal?: AbortSignal,
-  ): Promise<Map<string, NotionPageLike>> => {
-    const requestedKeys = new Set(keys)
-    const pagesByKey = new Map<string, NotionPageLike>()
-    if (requestedKeys.size === 0) return pagesByKey
-    if (!idPropertyName || !idPropertyReference) {
-      throw new NotionHttpError({
-        status: 405,
-        code: 'read_only_key',
-        message: 'A Notion page-ID key cannot be used for inserts.',
-        retryable: false,
-      })
-    }
-
-    const keyFilters = [...requestedKeys].map((key) => ({
-      property: idPropertyReference,
-      rich_text: { equals: key },
-    }))
-    const keyFilter =
-      keyFilters.length === 1 ? keyFilters[0]! : { or: keyFilters }
-    const filter = fixedFilter
-      ? { and: [keyFilter, structuredClone(fixedFilter)] }
-      : keyFilter
-    const seenCursors = new Set<string>()
-    let cursor: string | null = null
-    do {
-      const response = await queryPages(
-        {
-          page_size: 100,
-          filter,
-          ...(cursor ? { start_cursor: cursor } : {}),
-        },
-        signal,
-      )
-      for (const page of (response.results ?? []).filter(isPage)) {
-        const key = config.schema.getKey(config.schema.parsePage(page))
-        if (!requestedKeys.has(key)) continue
-        if (pagesByKey.has(key)) {
-          throw new NotionHttpError({
-            status: 409,
-            code: 'duplicate_client_id',
-            message: `More than one Notion page has the same ${idPropertyName} value.`,
-            retryable: false,
-          })
-        }
-        pagesByKey.set(key, page)
-      }
-      cursor =
-        response.has_more === true && typeof response.next_cursor === 'string'
-          ? response.next_cursor
-          : null
-      if (cursor) {
-        if (seenCursors.has(cursor)) {
-          throw new NotionHttpError({
-            status: 502,
-            code: 'repeated_query_cursor',
-            message: 'Notion repeated a pagination cursor during a key lookup.',
-            retryable: true,
-          })
-        }
-        seenCursors.add(cursor)
-      }
-    } while (cursor)
-    return pagesByKey
-  }
-
-  const findPageByKey = async (
-    key: string,
-    signal?: AbortSignal,
-  ): Promise<NotionPageLike | null> => {
-    const pages = await findPagesByKeys([key], signal)
-    return pages.get(key) ?? null
-  }
-
-  const resolvePage = async (
-    mutation: NotionMutation<TItem>,
-    signal?: AbortSignal,
-  ): Promise<NotionPageLike | null> => {
-    const pageId = config.schema.getPageId(mutation.value)
-    if (pageId) {
-      const page = await requestNotion<unknown>(
-        `/v1/pages/${encodeURIComponent(pageId)}`,
-        signal ? { signal } : {},
-      )
-      return isPage(page) ? page : null
-    }
-    return findPageByKey(mutation.key, signal)
-  }
-
-  const updatePage = async (
-    pageId: string,
-    value: TItem,
-    signal?: AbortSignal,
-    selectedFields?: ReadonlySet<keyof TFields & string>,
-  ): Promise<TItem> => {
-    const updated = await requestNotion<unknown>(
-      `/v1/pages/${encodeURIComponent(pageId)}`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({
-          properties: config.schema.serialize(value, selectedFields),
-        }),
-        ...(signal ? { signal } : {}),
-      },
-    )
-    if (!isPage(updated)) {
-      throw new NotionHttpError({
-        status: 502,
-        code: 'invalid_notion_response',
-        message: 'Notion returned an invalid page response.',
-        retryable: true,
-      })
-    }
-    return config.schema.parsePage(updated)
-  }
-
-  const applyMutation = async (
-    mutation: NotionMutation<TItem>,
-    signal?: AbortSignal,
-    prefetchedInsertPages?: Map<string, NotionPageLike>,
-  ): Promise<{ row?: TItem; deletedKey?: string }> => {
-    switch (mutation.type) {
-      case 'insert': {
-        const existing = prefetchedInsertPages
-          ? (prefetchedInsertPages.get(mutation.key) ?? null)
-          : await findPageByKey(mutation.key, signal)
-        if (existing) {
-          const row = config.schema.parsePage(existing)
-          if (
-            valuesEqual(
-              config.schema.serialize(row),
-              config.schema.serialize(mutation.value),
-            )
-          ) {
-            return { row }
-          }
-          throw new NotionHttpError({
-            status: 409,
-            code: 'insert_key_exists',
-            message: 'A Notion page already exists for this row key.',
-            retryable: false,
-          })
-        }
-        const created = await requestNotion<unknown>('/v1/pages', {
-          method: 'POST',
-          body: JSON.stringify({
-            parent: {
-              type: 'data_source_id',
-              data_source_id: dataSourceId,
-            },
-            properties: config.schema.serialize(mutation.value),
-          }),
-          ...(signal ? { signal } : {}),
-        })
-        if (!isPage(created)) {
-          throw new NotionHttpError({
-            status: 502,
-            code: 'invalid_notion_response',
-            message: 'Notion returned an invalid page response.',
-            retryable: true,
-          })
-        }
-        prefetchedInsertPages?.set(mutation.key, created)
-        return { row: config.schema.parsePage(created) }
-      }
-      case 'update': {
-        const existing = await resolvePage(mutation, signal)
-        if (!existing) {
-          throw new NotionHttpError({
-            status: 404,
-            code: 'page_not_found',
-            message: 'No Notion page was found for the requested row.',
-            retryable: false,
-          })
-        }
-        const remote = config.schema.parsePage(existing)
-        const fields = Object.keys(mutation.changes) as Array<
-          keyof TFields & string
-        >
-        const conflicts: Array<NotionPropertyConflict> = []
-        const pending = new Set<keyof TFields & string>()
-        for (const field of fields) {
-          const localValue = mutation.value[field]
-          const baseValue = mutation.base[field]
-          const remoteValue = remote[field]
-          if (!valuesEqual(mutation.changes[field], localValue)) {
-            throw new NotionHttpError({
-              status: 400,
-              code: 'invalid_update_changes',
-              message: 'An update change does not match its full row value.',
-              retryable: false,
-            })
-          }
-          if (
-            !valuesEqual(remoteValue, baseValue) &&
-            !valuesEqual(remoteValue, localValue)
-          ) {
-            conflicts.push({
-              field,
-              baseValue,
-              localValue,
-              remoteValue,
-            })
-          } else if (!valuesEqual(remoteValue, localValue)) {
-            pending.add(field)
-          }
-        }
-        if (conflicts.length > 0) {
-          throw new NotionHttpError({
-            status: 409,
-            code: 'property_conflict',
-            message: 'One or more changed properties were also edited in Notion.',
-            retryable: false,
-            conflicts,
-          })
-        }
-        if (pending.size === 0) return { row: remote }
-        return {
-          row: await updatePage(existing.id, mutation.value, signal, pending),
-        }
-      }
-      case 'delete': {
-        const existing = await resolvePage(mutation, signal)
-        if (existing) {
-          await requestNotion(`/v1/pages/${encodeURIComponent(existing.id)}`, {
-            method: 'PATCH',
-            body: JSON.stringify({ in_trash: true }),
-            ...(signal ? { signal } : {}),
-          })
-        }
-        return { deletedKey: mutation.key }
-      }
-    }
-  }
-
-  const applyBatch = async (
-    batch: NotionMutationBatch<TItem>,
-    signal?: AbortSignal,
-  ): Promise<NotionMutationResult<TItem>> => {
-    await ensureSchema(signal)
-    if (batch.mutations.length === 0 || batch.mutations.length > 50) {
-      throw new NotionHttpError({
-        status: 400,
-        code: 'invalid_batch_size',
-        message: 'A mutation batch must contain between 1 and 50 mutations.',
-        retryable: false,
-      })
-    }
-
-    const normalizedMutations: Array<NotionMutation<TItem>> = []
-    for (const mutation of batch.mutations) {
-      if (
-        !mutation ||
-        typeof mutation !== 'object' ||
-        !['insert', 'update', 'delete'].includes(mutation.type) ||
-        typeof mutation.key !== 'string' ||
-        !mutation.value ||
-        typeof mutation.value !== 'object'
-      ) {
-        throw new NotionHttpError({
-          status: 400,
-          code: 'invalid_mutation',
-          message: 'The request contains an invalid mutation.',
-          retryable: false,
-        })
-      }
-
-      if (mutation.type === 'update') {
-        if (!isRecord(mutation.base) || !isRecord(mutation.changes)) {
-          throw new NotionHttpError({
-            status: 400,
-            code: 'invalid_update_changes',
-            message: 'An update requires base and changes objects.',
-            retryable: false,
-          })
-        }
-        const changedFields = Object.keys(mutation.changes)
-        if (changedFields.length === 0) {
-          throw new NotionHttpError({
-            status: 400,
-            code: 'empty_update',
-            message: 'An update must change at least one writable property.',
-            retryable: false,
-          })
-        }
-        for (const field of changedFields) {
-          const descriptor = config.schema.fields[field]
-          if (
-            !descriptor ||
-            descriptor.readonly ||
-            field === config.schema.idField ||
-            !Object.hasOwn(mutation.base, field)
-          ) {
-            throw new NotionHttpError({
-              status: 400,
-              code: 'invalid_update_field',
-              message: `The update contains an unknown, read-only, identity, or unbased field (${field}).`,
-              retryable: false,
-            })
-          }
-        }
-      }
-
-      const validation = await config.schema['~standard'].validate(mutation.value)
-      if ('issues' in validation) {
-        throw new NotionSchemaError(
-          'A mutation does not match the configured schema.',
-          validation.issues,
-        )
-      }
-      const normalized = {
-        ...mutation,
-        value: validation.value,
-      } as NotionMutation<TItem>
-      if (config.schema.getKey(normalized.value) !== mutation.key) {
-        throw new NotionHttpError({
-          status: 400,
-          code: 'key_mismatch',
-          message: 'A mutation key does not match its row key.',
-          retryable: false,
-        })
-      }
-      normalizedMutations.push(normalized)
-    }
-
-    const prefetchedInsertPages = await findPagesByKeys(
-      normalizedMutations
-        .filter((mutation) => mutation.type === 'insert')
-        .map((mutation) => mutation.key),
-      signal,
-    )
-    const rows: Array<TItem> = []
-    const deletedKeys: Array<string> = []
-    for (const [mutationIndex, normalized] of normalizedMutations.entries()) {
-
-      const executeMutation = async () =>
-        normalized.type === 'insert' && idempotencyStore
-          ? await idempotencyStore.execute(
-              {
-                scope: `notion:${dataSourceId}:insert-key`,
-                key: normalized.key,
-                fingerprint: await fingerprint(
-                  config.schema.serialize(normalized.value),
-                ),
-              },
-              () =>
-                applyMutation(normalized, signal, prefetchedInsertPages),
-            )
-          : await applyMutation(normalized, signal, prefetchedInsertPages)
-      const result = idempotencyStore
-        ? await idempotencyStore.execute(
-            {
-              scope: `notion:${dataSourceId}:mutation`,
-              key: `${batch.idempotencyKey}:${mutationIndex}`,
-              fingerprint: await fingerprint(normalized),
-            },
-            executeMutation,
-          )
-        : await executeMutation()
-      if (result.row) rows.push(result.row)
-      if (result.deletedKey) deletedKeys.push(result.deletedKey)
-    }
-    return { rows, deletedKeys }
-  }
-
+  const applyBatch = createNotionMutationExecutor({
+    dataSourceId,
+    schema: config.schema,
+    idempotencyStore,
+    fixedFilter,
+    ensureSchema,
+    queryPages,
+    requestNotion,
+  })
   const assertPageBelongsToDataSource = async (
     pageId: string,
     signal?: AbortSignal,
