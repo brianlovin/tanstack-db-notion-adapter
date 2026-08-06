@@ -346,7 +346,7 @@ export type NotionSyncHandlerConfig<TFields extends NotionFields> =
 
 export interface ResolveNotionDataSourceIdConfig {
   token: string
-  /** A data source ID, or a database ID when the database has one data source. */
+  /** A data source ID, database ID, or pasted Notion database URL. */
   id: string
   notionVersion?: string
   fetch?: typeof globalThis.fetch
@@ -779,9 +779,32 @@ function dataSourceProperty(
   return properties[name]
 }
 
+function notionObjectId(value: string): string {
+  const input = value.trim()
+  if (!/^https?:\/\//i.test(input)) return input
+
+  let url: URL
+  try {
+    url = new URL(input)
+  } catch {
+    throw new Error('The configured Notion URL is invalid.')
+  }
+  if (!/(^|\.)notion\.(so|site)$/i.test(url.hostname)) {
+    throw new Error('Expected a notion.so or notion.site database URL.')
+  }
+  const matches = url.pathname.match(
+    /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{32}/gi,
+  )
+  const id = matches?.at(-1)
+  if (!id) {
+    throw new Error('Could not find a database ID in the Notion URL.')
+  }
+  return id
+}
+
 /**
- * Accepts either a data source ID or a single-source database ID and returns
- * the concrete data source ID required by Notion's data APIs.
+ * Accepts a data source ID, single-source database ID, or pasted Notion URL and
+ * returns the concrete data source ID required by Notion's data APIs.
  */
 export async function resolveNotionDataSourceId(
   config: ResolveNotionDataSourceIdConfig,
@@ -795,12 +818,13 @@ export async function resolveNotionDataSourceId(
     'Notion-Version': config.notionVersion ?? LATEST_NOTION_VERSION,
     Accept: 'application/json',
   }
-  const encodedId = encodeURIComponent(config.id)
+  const id = notionObjectId(config.id)
+  const encodedId = encodeURIComponent(id)
   const dataSourceResponse = await fetcher(
     `${baseUrl}/v1/data_sources/${encodedId}`,
     { headers },
   )
-  if (dataSourceResponse.ok) return config.id
+  if (dataSourceResponse.ok) return id
 
   const dataSourceError = (await dataSourceResponse.json().catch(() => ({}))) as
     NotionApiErrorResponse

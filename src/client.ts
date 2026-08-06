@@ -142,6 +142,10 @@ export interface NotionRemotePaginationState {
 }
 
 export interface NotionCollectionUtils<TItem extends object> extends UtilsRecord {
+  /** Enables automatic reconciliation and immediately synchronizes. */
+  resumeSync: () => Promise<void>
+  /** Stops automatic remote requests without clearing local rows or pending work. */
+  pauseSync: () => void
   syncNow: () => Promise<void>
   checkForRemoteChanges: () => Promise<boolean>
   loadMore: () => Promise<void>
@@ -198,6 +202,12 @@ export interface NotionCollectionConfig<TFields extends NotionFields>
   syncMode?: 'eager' | 'progressive'
   /** Reconcile when a background tab becomes visible. @default true */
   refreshOnWindowFocus?: boolean
+  /**
+   * Start remote reconciliation as soon as the local cache is ready. Disable
+   * this when authentication must finish before the sync endpoint is called.
+   * @default true
+   */
+  autoStart?: boolean
 }
 
 export class NotionSyncError extends Error {
@@ -1084,6 +1094,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   let rows = new Map<string, TItem>()
   let sink: SyncParams | null = null
   let disposed = false
+  let syncEnabled = config.autoStart !== false
   let initialized = false
   let initializeResolve!: () => void
   let operationQueue = Promise.resolve()
@@ -1630,14 +1641,16 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           outbox: [...state.outbox, ...entries],
         }
         await commitState(nextState, next)
+        let status: NotionSyncStatus = 'offline'
+        if (online()) status = syncEnabled ? 'syncing' : 'idle'
         setSyncState({
-          status: online() ? 'syncing' : 'offline',
+          status,
           error: null,
         })
       }),
     )
 
-    if (online()) void synchronize().catch(() => undefined)
+    if (syncEnabled && online()) void synchronize().catch(() => undefined)
   }
 
   const onInsert = async (params: InsertMutationFnParams<TItem, string>) => {
@@ -1680,14 +1693,18 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     )
   }
 
-  const handleOnline = () => void synchronize().catch(() => undefined)
-  const handleInvalidationPoll = () =>
+  const handleOnline = () => {
+    if (syncEnabled) void synchronize().catch(() => undefined)
+  }
+  const handleInvalidationPoll = () => {
+    if (!syncEnabled) return
     void checkForRemoteChanges().catch((error) => {
       setSyncState({
         status: online() ? 'error' : 'offline',
         error: error instanceof Error ? error.message : 'Change detection failed.',
       })
     })
+  }
   const handleOffline = () => setSyncState({ status: 'offline', error: null })
   const handleVisibility = () => {
     if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
@@ -1748,7 +1765,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           initializeResolve()
           params.markReady()
         }
-        if (online()) void synchronize().catch(() => undefined)
+        if (syncEnabled && online()) void synchronize().catch(() => undefined)
       })()
 
       return () => {
@@ -1773,6 +1790,17 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   }
 
   const utils: NotionCollectionUtils<TItem> = {
+    async resumeSync() {
+      syncEnabled = true
+      await synchronize()
+    },
+    pauseSync() {
+      syncEnabled = false
+      setSyncState({
+        status: online() ? 'idle' : 'offline',
+        error: null,
+      })
+    },
     syncNow: synchronize,
     checkForRemoteChanges,
     loadMore,
@@ -1902,6 +1930,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     readOnly: _readOnly,
     syncMode: _syncMode,
     refreshOnWindowFocus: _refreshOnWindowFocus,
+    autoStart: _autoStart,
     ...baseConfig
   } = config
 

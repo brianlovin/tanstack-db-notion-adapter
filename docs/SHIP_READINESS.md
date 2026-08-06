@@ -169,10 +169,32 @@ lost response can silently lose an acknowledged edit or create a duplicate.
   sensitive sources.
 - [x] Define offline media behavior because Notion-hosted file URLs expire.
 - [x] Add structured observability hooks without logging content or secrets.
-- [ ] Pin TanStack DB packages to a tested compatible range (core is pinned to
-  `0.6.17`) and exercise packed installs against supported framework/build-tool
-  combinations. The exact core version is pinned; packed framework fixtures
-  remain part of the distribution test backlog.
+- [x] Declare `@tanstack/db` as a compatible peer (`^0.6.17`), test against
+  exact `0.6.17`, and assert a packed consumer installs one collection runtime.
+  Additional framework/build-tool versions remain a distribution-test backlog.
+
+## Clean-room integration audit
+
+A separate agent built a journal from the published docs and a packed tarball,
+then verified schema evolution, typed CRUD, page bodies, offline reload,
+property renames, conflicts, and durable SQLite idempotency against live Notion.
+
+- [x] Accept a pasted Notion database URL and document
+  `resolveNotionDataSourceId()`.
+- [x] Gate collection and page-content auto-sync until browser authentication
+  is ready, while still hydrating durable local state.
+- [x] Warn before `push` adds the visible stable client-ID property.
+- [x] Provide a pasteable localhost handler and document the single GET/POST
+  route protocol plus production policy replacements.
+- [x] Document the generated input/update-draft type and the complete page-body
+  `createDraft` / `load` / `attachPage` lifecycle.
+- [x] Prove persisted content failures clear and retry after client recreation.
+- [x] Ship the tested SQLite idempotency reference linked by the package docs.
+- [x] Preserve `$schema`, remove duplicate option config, and distinguish drift
+  output from the inert push dry run.
+- [x] Document that offline data hydration does not cache the host app shell.
+- [ ] Publish the verified package to npm and repeat the clean install from the
+  registry rather than a tarball.
 
 ## Test program
 
@@ -358,6 +380,9 @@ On narrow screens the panes become separate views with a Back control.
 - **2026-08-04:** Daylight's SQLite idempotency store is a production recipe for
   one durable host, not a distributed default. The package keeps storage,
   limiter, and invalidation backends pluggable.
+- **2026-08-06:** Authenticated apps may hydrate immediately but can defer all
+  automatic collection and page-content requests with `autoStart: false`, then
+  explicitly resume after session restoration.
 
 ## External constraints to keep checking
 

@@ -3,8 +3,10 @@ import {
   assertNotionSchemaManifest,
   createNotionSchemaManifest,
   diffNotionSchema,
+  formatNotionSchemaDrift,
   generateNotionSchemaSource,
   inspectNotionDataSource,
+  NOTION_SCHEMA_MANIFEST_URL,
   pushNotionSchema,
   validateNotionSchemaManifest,
   type NotionDataSourceSnapshot,
@@ -140,6 +142,69 @@ describe('Notion schema tooling', () => {
       'Name',
       'When',
     ])
+  })
+
+  it('adds the manifest schema hint and stores select options only once', () => {
+    const snapshot: NotionDataSourceSnapshot = {
+      ...blankSnapshot,
+      properties: [
+        ...blankSnapshot.properties,
+        {
+          id: 'mood-id',
+          name: 'Mood',
+          type: 'select',
+          options: [
+            { id: 'happy-id', name: 'Happy', color: 'yellow' },
+            { id: 'calm-id', name: 'Calm', color: 'blue' },
+          ],
+          config: {
+            options: [
+              { id: 'happy-id', name: 'Happy', color: 'yellow' },
+              { id: 'calm-id', name: 'Calm', color: 'blue' },
+            ],
+          },
+        },
+      ],
+    }
+
+    const manifest = createNotionSchemaManifest(snapshot)
+
+    expect(manifest.$schema).toBe(NOTION_SCHEMA_MANIFEST_URL)
+    expect(manifest.properties.find((field) => field.key === 'mood')).toMatchObject({
+      options: [
+        { id: 'happy-id', name: 'Happy', color: 'yellow' },
+        { id: 'calm-id', name: 'Calm', color: 'blue' },
+      ],
+      config: {},
+    })
+    expect(
+      manifest.properties.find((field) => field.key === 'mood')?.config,
+    ).not.toHaveProperty('options')
+
+    const customSchema = createNotionSchemaManifest(snapshot, {
+      existing: { ...manifest, $schema: 'https://schemas.test/notion.json' },
+    })
+    expect(customSchema.$schema).toBe('https://schemas.test/notion.json')
+  })
+
+  it('describes schema drift without presenting it as a push plan', () => {
+    const manifest = todoManifest()
+    manifest.properties[1]!.propertyId = 'done-id'
+    const operations = diffNotionSchema(manifest, {
+      ...blankSnapshot,
+      properties: [
+        ...blankSnapshot.properties,
+        { id: 'done-id', name: 'Finished', type: 'checkbox', config: {} },
+      ],
+    })
+
+    expect(formatNotionSchemaDrift(operations)).toContain(
+      'property done-id is named "Finished" in Notion; manifest expects "Done"',
+    )
+    expect(formatNotionSchemaDrift(operations)).toContain(
+      '"Client ID" is missing from Notion',
+    )
+    expect(formatNotionSchemaDrift(operations)).not.toContain('+ rename')
   })
 
   it('introspects complex properties with typed codecs and preserves unknown types', async () => {

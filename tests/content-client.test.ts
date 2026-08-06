@@ -169,6 +169,61 @@ describe('createNotionPageContentClient', () => {
     restored.cleanup()
   })
 
+  it('waits for authenticated resume before restoring pending content', async () => {
+    const storage = createMemoryNotionStorage()
+    let isOnline = true
+    let remoteMarkdown = 'Original'
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { markdown: string }
+        remoteMarkdown = body.markdown
+      }
+      return Response.json(content(remoteMarkdown))
+    })
+    const first = createNotionPageContentClient({
+      id: 'authenticated-content',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: fetch as typeof globalThis.fetch,
+      debounceMs: 1,
+      isOnline: () => isOnline,
+    })
+    await first.load('note-1', 'page-1')
+    isOnline = false
+    await first.update('note-1', 'Saved before reload')
+    first.cleanup()
+
+    fetch.mockClear()
+    isOnline = true
+    const restored = createNotionPageContentClient({
+      id: 'authenticated-content',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: fetch as typeof globalThis.fetch,
+      debounceMs: 1,
+      isOnline: () => isOnline,
+      autoStart: false,
+    })
+    await restored.ready()
+    await new Promise((resolve) => setTimeout(resolve, 5))
+
+    expect(fetch).not.toHaveBeenCalled()
+    expect(restored.get('note-1')).toMatchObject({
+      markdown: 'Saved before reload',
+      pending: true,
+      status: 'saved-local',
+    })
+
+    await restored.resumeSync()
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(restored.get('note-1')).toMatchObject({
+      pending: false,
+      status: 'synced',
+    })
+    restored.cleanup()
+  })
+
   it('keeps a new offline row draft under its client key until Notion assigns a page', async () => {
     const storage = createMemoryNotionStorage()
     let remoteMarkdown = ''
@@ -307,6 +362,51 @@ describe('createNotionPageContentClient', () => {
       status: 'synced',
     })
     client.cleanup()
+  })
+
+  it('automatically retries a persisted content error after recreation', async () => {
+    const storage = createMemoryNotionStorage()
+    let remoteMarkdown = 'Original'
+    let failWrite = true
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as { markdown: string }
+        if (failWrite) throw new TypeError('Session was not ready.')
+        remoteMarkdown = body.markdown
+      }
+      return Response.json(content(remoteMarkdown))
+    })
+    const first = createNotionPageContentClient({
+      id: 'restored-error-content',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: fetch as typeof globalThis.fetch,
+      debounceMs: 1,
+    })
+    await first.load('note-1', 'page-1')
+    await first.update('note-1', 'Retry after reload')
+    await expect(first.flush('note-1')).rejects.toThrow('Session was not ready.')
+    first.cleanup()
+
+    failWrite = false
+    const restored = createNotionPageContentClient({
+      id: 'restored-error-content',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: fetch as typeof globalThis.fetch,
+      debounceMs: 1,
+    })
+    await restored.ready()
+
+    await vi.waitFor(() => {
+      expect(restored.get('note-1')).toMatchObject({
+        markdown: 'Retry after reload',
+        pending: false,
+        status: 'synced',
+        error: null,
+      })
+    })
+    restored.cleanup()
   })
 
   it('aborts an in-flight content request and prevents later writes after cleanup', async () => {

@@ -2,6 +2,8 @@
 
 The handler accepts a Web `Request` and returns a Web `Response`. In every
 framework, keep the token import and handler in a server-only entry point.
+Mount GET and POST on exactly the same path. Internal operations such as
+`?action=schema`, `?action=version`, and `?action=content` use that route.
 
 ## Hono
 

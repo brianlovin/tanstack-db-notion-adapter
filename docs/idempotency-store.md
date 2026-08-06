@@ -59,12 +59,12 @@ same instance, but it is intentionally not durable.
 
 ## Single-host SQLite example
 
-The Daylight application includes a tested Node SQLite implementation in
-[`apps/todo/server/idempotency.ts`](../apps/todo/server/idempotency.ts). It uses
+The package includes a copyable Node SQLite implementation in
+[`sqlite-idempotency-store.ts`](sqlite-idempotency-store.ts). It uses
 a unique `(scope, key)` row, `BEGIN IMMEDIATE` ownership election, WAL with full
 synchronous durability, renewable leases, fingerprint collision rejection,
-and committed result replay. Two independent store instances are covered by a
-concurrency regression test.
+and committed result replay. The repository test suite covers two independent
+store instances racing for the same operation.
 
 This is appropriate for one durable host whose processes share the same local
 database file. It is not appropriate for ephemeral/serverless filesystems or

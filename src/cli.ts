@@ -9,6 +9,7 @@ import {
   createNotionSchemaManifest,
   diffNotionSchema,
   formatNotionSchemaDiff,
+  formatNotionSchemaDrift,
   generateNotionSchemaSource,
   inspectNotionDataSource,
   pushNotionSchema,
@@ -52,7 +53,7 @@ Options:
   --env <path>            Load PAT and IDs from an env file
   --manifest <path>       Manifest path (default: notion.schema.json)
   --out <path>            Generated TypeScript path
-  --id <id>               Data source or single-source database ID
+  --id <id-or-url>        Data source ID, database ID, or Notion database URL
   --name <exportName>     Generated schema export name
   --sync-key <name>       Stable rich-text key (default: Client ID)
   --dry-run               Show what push would change without updating Notion
@@ -222,7 +223,7 @@ function credentials(
   }
   if (!id) {
     throw new Error(
-      'Set NOTION_DATA_SOURCE_ID or NOTION_DATABASE_ID, or pass --id.',
+      'Set NOTION_DATA_SOURCE_ID or NOTION_DATABASE_ID, or pass --id with an ID or Notion URL.',
     )
   }
   return { token, id }
@@ -272,7 +273,7 @@ async function main(): Promise<void> {
     console.log(`Properties: ${snapshot.properties.length}`)
     if (existing) {
       const operations = diffNotionSchema(existing, snapshot)
-      console.log(formatNotionSchemaDiff(operations))
+      console.log(formatNotionSchemaDrift(operations))
       if (operations.length) process.exitCode = 1
     } else {
       console.log(`Manifest not found: ${options.manifestPath}`)
@@ -306,11 +307,24 @@ async function main(): Promise<void> {
     )
   }
   const operations = diffNotionSchema(existing, snapshot)
-  console.log(formatNotionSchemaDiff(operations))
-  console.log(`Notion: ${notionSourceUrl(snapshot.dataSourceId)}`)
   if (options.command === 'check') {
+    console.log(formatNotionSchemaDrift(operations))
+    console.log(`Notion: ${notionSourceUrl(snapshot.dataSourceId)}`)
     if (operations.length) process.exitCode = 1
     return
+  }
+  console.log(formatNotionSchemaDiff(operations))
+  console.log(`Notion: ${notionSourceUrl(snapshot.dataSourceId)}`)
+  if (
+    operations.some(
+      (operation) =>
+        operation.kind === 'add' &&
+        operation.field.key === existing.syncKey.key,
+    )
+  ) {
+    console.warn(
+      `Note: push will add the visible ${JSON.stringify(existing.syncKey.name)} rich-text property used as the stable offline sync key.`,
+    )
   }
   if (options.dryRun) return
 

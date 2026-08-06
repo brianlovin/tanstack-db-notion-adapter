@@ -26,6 +26,134 @@ describe('notionCollectionOptions', () => {
     expect(options).not.toHaveProperty('onDelete')
   })
 
+  it('hydrates without contacting the server until authenticated sync resumes', async () => {
+    const cached = testTodo({ id: 'cached-1', title: 'Cached while signed out' })
+    const remote = testTodo({ id: 'remote-1', title: 'Loaded after sign in' })
+    const storage = createMemoryNotionStorage()
+    await storage.save('authenticated-todos', {
+      version: 2,
+      revision: 0,
+      rows: [cached],
+      outbox: [],
+      lastSyncedAt: 123,
+    })
+    const fetch = vi.fn(async () =>
+      Response.json({ rows: [remote], hasMore: false, nextCursor: null }),
+    )
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'authenticated-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        autoStart: false,
+        pollIntervalMs: 0,
+      }),
+    )
+
+    await collection.preload()
+
+    expect(fetch).not.toHaveBeenCalled()
+    expect(collection.get('cached-1')?.title).toBe('Cached while signed out')
+    expect(collection.utils.getSyncState()).toMatchObject({
+      status: 'idle',
+      error: null,
+    })
+
+    await collection.utils.resumeSync()
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+    expect(collection.get('cached-1')).toBeUndefined()
+    expect(collection.get('remote-1')?.title).toBe('Loaded after sign in')
+    expect(collection.utils.getSyncState()).toMatchObject({
+      status: 'synced',
+      error: null,
+    })
+    await collection.cleanup()
+  })
+
+  it('clears an initial authorization error when sync resumes after login', async () => {
+    let authenticated = false
+    const fetch = vi.fn(async () => {
+      if (!authenticated) {
+        return Response.json(
+          {
+            error: {
+              code: 'unauthorized',
+              message: 'Authentication is required to sync this collection.',
+              retryable: false,
+            },
+          },
+          { status: 401 },
+        )
+      }
+      return Response.json({
+        rows: [testTodo({ id: 'signed-in-1', title: 'Authenticated data' })],
+        hasMore: false,
+        nextCursor: null,
+      })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'login-race-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage: createMemoryNotionStorage(),
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        pollIntervalMs: 0,
+      }),
+    )
+    await collection.preload()
+    await vi.waitFor(() => {
+      expect(collection.utils.getSyncState()).toMatchObject({
+        status: 'error',
+        error: 'Authentication is required to sync this collection.',
+      })
+    })
+
+    authenticated = true
+    await collection.utils.resumeSync()
+
+    expect(collection.get('signed-in-1')?.title).toBe('Authenticated data')
+    expect(collection.utils.getSyncState()).toMatchObject({
+      status: 'synced',
+      error: null,
+    })
+    await collection.cleanup()
+  })
+
+  it('keeps mutations durable while automatic sync is paused', async () => {
+    const storage = createMemoryNotionStorage()
+    const fetch = vi.fn(async () =>
+      Response.json({ rows: [], deletedKeys: [], hasMore: false, nextCursor: null }),
+    )
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'paused-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        autoStart: false,
+        pollIntervalMs: 0,
+      }),
+    )
+    await collection.preload()
+
+    const transaction = collection.insert({ id: 'local-1', title: 'Queued locally' })
+    await transaction.isPersisted.promise
+
+    expect(fetch).not.toHaveBeenCalled()
+    expect(collection.get('local-1')?.title).toBe('Queued locally')
+    expect(await collection.utils.getPendingMutations()).toHaveLength(1)
+    expect(collection.utils.getSyncState().status).toBe('idle')
+    await collection.cleanup()
+  })
+
   it('migrates a valid version-one envelope before acknowledging new work', async () => {
     const cached = testTodo({ id: 'legacy-1', title: 'Legacy cache' })
     let persisted: NotionPersistedEnvelope<typeof cached> | null = {

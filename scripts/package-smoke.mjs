@@ -28,6 +28,17 @@ async function run(command, args, cwd = temporaryRoot) {
   }
 }
 
+function countDependency(node, name) {
+  if (!node?.dependencies) return 0
+  return Object.entries(node.dependencies).reduce(
+    (count, [dependencyName, dependency]) =>
+      count +
+      (dependencyName === name ? 1 : 0) +
+      countDependency(dependency, name),
+    0,
+  )
+}
+
 try {
   const { stdout } = await run(
     'npm',
@@ -66,6 +77,16 @@ for (const [name, value] of Object.entries({ notion, notionCollectionOptions, cr
   )
   await run('node', ['consumer.mjs'])
 
+  const { stdout: dependencyTree } = await run('npm', [
+    'ls',
+    '@tanstack/db',
+    '--all',
+    '--json',
+  ])
+  if (countDependency(JSON.parse(dependencyTree), '@tanstack/db') !== 1) {
+    throw new Error('The packed package installed more than one @tanstack/db runtime.')
+  }
+
   const cli = join(temporaryRoot, 'node_modules', '.bin', 'tanstack-db-notion')
   const { stdout: cliHelp } = await run(cli, ['--help'])
   if (!cliHelp.includes('push       Update Notion')) {
@@ -90,6 +111,15 @@ for (const [name, value] of Object.entries({ notion, notionCollectionOptions, cr
   if (manifestSchema.title !== 'TanStack DB Notion schema manifest') {
     throw new Error('Packed manifest JSON Schema is missing.')
   }
+  await access(
+    join(
+      temporaryRoot,
+      'node_modules',
+      'tanstack-db-notion-adapter',
+      'docs',
+      'sqlite-idempotency-store.ts',
+    ),
+  )
   try {
     await access(
       join(

@@ -13,9 +13,19 @@ The browser receives only an application endpoint. Do not use a `VITE_`,
 
 A Notion personal access token is a good fit for a private tool owned by the
 same person as the workspace. Run it only on the server and protect the sync
-endpoint with application authentication. The Daylight app demonstrates a
+endpoint with application authentication. The standalone Todo app demonstrates a
 password-gated, signed, `HttpOnly`, `SameSite=Strict` cookie and rejects
 cross-origin writes. Its `DEV_BYPASS_AUTH` mode is refused in production.
+
+When session restoration happens in the browser, create the collection with
+`autoStart: false`. This hydrates local data without racing the login endpoint.
+Call `collection.utils.resumeSync()` after authentication succeeds and
+`collection.utils.pauseSync()` before logout or an account switch. Pausing
+retains local rows and durable pending work.
+
+Page-content clients support the same `autoStart`, `resumeSync()`, and
+`pauseSync()` lifecycle. Gate both clients together so restored content drafts
+do not race session restoration either.
 
 The authorization callback must answer both questions:
 

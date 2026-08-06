@@ -11,6 +11,13 @@ their values. Restart the server after changing env files.
 The database contains multiple data sources. Retrieve/list their names and IDs,
 then set the exact data source ID chosen by the user.
 
+## Sync returns 401 during application startup
+
+The collection loaded before the browser session. Configure `autoStart: false`,
+restore or create the session, then call `collection.utils.resumeSync()`. Call
+`pauseSync()` before logout or an account switch. Cached rows and pending
+mutations remain durable while automatic requests are paused.
+
 ## `schema_mismatch`
 
 Run `pull` to inspect live state or `push --dry-run` to compare desired state.

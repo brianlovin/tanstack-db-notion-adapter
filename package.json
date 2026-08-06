@@ -26,6 +26,7 @@
     "docs/authentication.md",
     "docs/errors-and-recovery.md",
     "docs/idempotency-store.md",
+    "docs/sqlite-idempotency-store.ts",
     "docs/large-datasets.md",
     "docs/operations.md",
     "docs/schema-workflow.md",
@@ -84,11 +85,14 @@
     "preview": "vite preview --config examples/todos/vite.config.ts"
   },
   "dependencies": {
-    "@standard-schema/spec": "^1.1.0",
-    "@tanstack/db": "0.6.17"
+    "@standard-schema/spec": "^1.1.0"
+  },
+  "peerDependencies": {
+    "@tanstack/db": "^0.6.17"
   },
   "devDependencies": {
     "@hono/node-server": "^2.0.12",
+    "@tanstack/db": "0.6.17",
     "@tanstack/react-db": "^0.1.95",
     "@types/node": "^24.0.0",
     "@types/react": "^19.2.0",

@@ -43,11 +43,15 @@ export interface NotionPageContentClientConfig {
   /** Abort a content request after this interval. @default 30000 */
   requestTimeoutMs?: number
   isOnline?: () => boolean
+  /** Wait for authentication before automatically flushing pending drafts. */
+  autoStart?: boolean
 }
 
 export interface NotionPageContentClient {
   readonly storage: NotionCollectionStorage['kind']
   ready: () => Promise<void>
+  resumeSync: () => Promise<void>
+  pauseSync: () => void
   get: (key: string) => NotionPageContentSnapshot | undefined
   subscribe: (listener: () => void) => () => void
   createDraft: (key: string, initialMarkdown?: string) => Promise<void>
@@ -121,6 +125,7 @@ export function createNotionPageContentClient(
   let records = new Map<string, NotionPageContentSnapshot>()
   let operationQueue = Promise.resolve()
   let disposed = false
+  let syncEnabled = config.autoStart !== false
   let storageRevision = 0
   const lifecycle = new AbortController()
 
@@ -254,6 +259,7 @@ export function createNotionPageContentClient(
   }
 
   const schedule = (key: string, delay = debounceMs) => {
+    if (!syncEnabled) return
     const existing = timers.get(key)
     if (existing) clearTimeout(existing)
     timers.set(
@@ -452,7 +458,7 @@ export function createNotionPageContentClient(
   }
 
   const handleOnline = () => {
-    void client.flushAll().catch(() => undefined)
+    if (syncEnabled) void client.flushAll().catch(() => undefined)
   }
 
   if (typeof window !== 'undefined') {
@@ -464,6 +470,15 @@ export function createNotionPageContentClient(
       return storage.kind
     },
     ready: () => initialization,
+    async resumeSync() {
+      syncEnabled = true
+      await client.flushAll()
+    },
+    pauseSync() {
+      syncEnabled = false
+      for (const timer of timers.values()) clearTimeout(timer)
+      timers.clear()
+    },
     get(key) {
       return records.get(key)
     },
@@ -669,7 +684,7 @@ export function createNotionPageContentClient(
 
   void initialization
     .then(() => {
-      if (!disposed && online()) {
+      if (!disposed && syncEnabled && online()) {
         for (const record of records.values()) {
           if (
             record.pending &&

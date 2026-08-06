@@ -558,6 +558,37 @@ describe('createNotionSyncHandler', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
+  it('resolves a pasted Notion database URL', async () => {
+    const databaseId = '0123456789abcdef0123456789abcdef'
+    const requestedPaths: Array<string> = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      requestedPaths.push(url.pathname)
+      if (url.pathname.startsWith('/v1/data_sources/')) {
+        return Response.json({ message: 'Not a data source' }, { status: 404 })
+      }
+      return Response.json({
+        object: 'database',
+        data_sources: [{ id: 'source-1', name: 'Journal' }],
+      })
+    })
+
+    await expect(
+      resolveNotionDataSourceId({
+        token: 'personal-access-token',
+        id: `https://www.notion.so/workspace/Journal-${databaseId}?v=view-id`,
+        fetch: fetch as typeof globalThis.fetch,
+        baseUrl: 'https://api.notion.test',
+      }),
+    ).resolves.toBe('source-1')
+    expect(requestedPaths).toEqual([
+      `/v1/data_sources/${databaseId}`,
+      `/v1/databases/${databaseId}`,
+    ])
+  })
+
   it('lists names and IDs when a database has multiple data sources', async () => {
     const fetch = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(

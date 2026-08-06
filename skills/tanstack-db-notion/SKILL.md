@@ -38,6 +38,7 @@ For an existing data source, introspect it:
 ```sh
 npx tanstack-db-notion init \
   --env .env \
+  --id "https://www.notion.so/workspace/Your-Database-..." \
   --manifest notion.schema.json \
   --out src/notion.generated.ts \
   --name projectSchema
@@ -55,9 +56,10 @@ Treat the manifest as authored source and the generated TypeScript file as
 output. Never hand-edit generated descriptors. Preserve Notion property IDs;
 they keep a field stable when its display name changes.
 
-Accept an exact data source ID. A database ID is safe only when it resolves to
-one data source. If Notion returns multiple sources, list the choices and ask
-the user to select one; never guess.
+Accept an exact data source ID, database ID, or pasted Notion database URL. A
+database is safe only when it resolves to one data source. If Notion returns
+multiple sources, list the choices and ask the user to select one; never guess.
+Use `resolveNotionDataSourceId()` for the same resolution in server setup.
 
 ## Evolve safely
 
@@ -71,6 +73,8 @@ the user to select one; never guess.
    ```
 
 4. Explain the exact additions, renames, removals, or type changes.
+   Explicitly call out when push will add the visible `Client ID` rich-text
+   property used as the stable offline sync key.
 5. Apply a push only after the dry run is clean. Obtain explicit user approval
    before any command that accepts data loss.
 6. Run `check` in CI to detect drift.
@@ -109,6 +113,12 @@ const items = createCollection(
 )
 ```
 
+Mount GET and POST at that same endpoint; the handler dispatches schema,
+version, and content operations with its query string. If the collection can
+load before browser authentication finishes, set `autoStart: false`, then call
+`items.utils.resumeSync()` after session restoration and `pauseSync()` before
+logout. Do not let module evaluation race the login gate.
+
 Do not report a TanStack mutation as persisted until its outbox write is
 durable. Preserve FIFO ordering, overlay pending writes on remote snapshots,
 and expose retry/discard rather than deleting a poison entry automatically.
@@ -130,6 +140,15 @@ enable `pageContent: true` on the protected handler and use
 draft locally immediately; debounce only the remote flush. Keep local and
 remote bodies on conflict and require explicit data-loss acceptance before an
 overwrite.
+
+For authenticated startup, configure the content client with
+`autoStart: false`, then resume and pause it with the main collection.
+
+For a new row, choose the client ID before insertion, pass it to both
+`collection.insert({ id, ... })` and `content.createDraft(id)`, then call
+`content.attachPage(id, row.notionPageId)` after Notion creates the page. For an
+existing row, call `content.load(row.id, row.notionPageId)` on demand. Use
+`content.flush(id)` as save-now or explicit retry.
 
 Do not eagerly fetch every page body. Refuse lossy replacement when Notion
 reports truncation or unknown blocks.

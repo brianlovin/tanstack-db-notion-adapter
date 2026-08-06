@@ -12,7 +12,7 @@ per-request timeouts.
 ## Idempotency
 
 Writable production handlers require a durable shared `NotionIdempotencyStore`.
-See [the store contract](./idempotency-store.md). Daylight provides a SQLite WAL
+See [the store contract](./idempotency-store.md). The package provides a SQLite WAL
 implementation for one durable host with multiple processes; horizontally
 scaled deployments should use a shared database or serialized service.
 

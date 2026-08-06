@@ -5,11 +5,11 @@ The generated TypeScript file is disposable output, and the live Notion data
 source is the external system being compared or changed. Keep the manifest and
 generated file in source control; keep credentials in a server-only env file.
 
-Add the packaged JSON Schema for editor diagnostics:
+New manifests include the published JSON Schema URL for editor diagnostics:
 
 ```json
 {
-  "$schema": "./node_modules/tanstack-db-notion-adapter/schema/notion.schema.json",
+  "$schema": "https://unpkg.com/tanstack-db-notion-adapter/schema/notion.schema.json",
   "version": 1,
   "exportName": "projectSchema",
   "properties": []
@@ -22,10 +22,14 @@ name collisions, duplicate Notion names, and duplicate stable property IDs.
 
 ## Connect an existing source
 
+Pass an exact data source ID, a single-source database ID, or paste the Notion
+database URL directly into `--id`. The CLI resolves the concrete source and
+writes it to the manifest:
+
 ```sh
-npx tanstack-db-notion doctor --env .env --manifest notion.schema.json
 npx tanstack-db-notion init \
   --env .env \
+  --id "https://www.notion.so/workspace/Your-Database-..." \
   --manifest notion.schema.json \
   --out src/notion.generated.ts \
   --name projectSchema
@@ -36,9 +40,10 @@ and generates both `ProjectSchemaInput` and `ProjectSchemaRow`. Input omits
 read-only Notion fields; row includes them. Review raw or unsupported fields in
 the [property matrix](./PROPERTY_SUPPORT.md) before building mutations.
 
-Use an exact data source ID whenever possible. A database ID is accepted only
-when it resolves to one source. If a database has several sources, the CLI
-lists their names and IDs and stops instead of guessing.
+A database ID or URL is accepted only when it resolves to one source. If a
+database has several sources, the CLI lists their names and IDs and stops
+instead of guessing. `resolveNotionDataSourceId()` provides the same behavior
+for server setup.
 
 ## Evolve a code-first source
 
@@ -60,6 +65,10 @@ npx tanstack-db-notion check --env .env --manifest notion.schema.json
 then pulls stable property IDs and regenerates types. Type changes or option
 removals require `--accept-data-loss`; ask the data owner before using it. The
 deprecated `--allow-destructive` alias emits a warning.
+
+The adapter needs a stable rich-text sync key. For a new or existing source,
+the default manifest calls it `Client ID`. A dry run warns when push will add
+this visible column; review that change before applying it.
 
 Property order follows the manifest, even when Notion returns another order,
 so pull does not create noisy source diffs. Generated and manifest writes use

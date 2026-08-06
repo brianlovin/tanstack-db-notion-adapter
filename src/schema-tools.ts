@@ -51,7 +51,7 @@ export interface NotionDataSourceSnapshot {
 
 export interface InspectNotionDataSourceConfig {
   token: string
-  /** A data source ID, or a database ID with exactly one data source. */
+  /** A data source ID, single-source database ID, or pasted Notion URL. */
   id: string
   notionVersion?: string
   fetch?: typeof globalThis.fetch
@@ -92,6 +92,9 @@ export interface NotionSchemaManifest {
   }
   properties: Array<NotionManifestProperty>
 }
+
+export const NOTION_SCHEMA_MANIFEST_URL =
+  'https://unpkg.com/tanstack-db-notion-adapter/schema/notion.schema.json'
 
 export interface NotionManifestValidationIssue {
   path: string
@@ -175,6 +178,12 @@ export function validateNotionSchemaManifest(
   if (!manifest) return [{ path: '$', message: 'Expected a JSON object.' }]
   if (manifest.version !== 1) {
     issues.push({ path: 'version', message: 'Expected manifest version 1.' })
+  }
+  if (
+    manifest.$schema !== undefined &&
+    (typeof manifest.$schema !== 'string' || !manifest.$schema.trim())
+  ) {
+    issues.push({ path: '$schema', message: 'Expected a non-empty string.' })
   }
   const notionVersion = requireString(manifest, 'notionVersion', 'notionVersion')
   if (notionVersion && !/^\d{4}-\d{2}-\d{2}$/.test(notionVersion)) {
@@ -414,6 +423,20 @@ function propertyIdMatches(left: string, right: string): boolean {
   }
 }
 
+function manifestPropertyConfig(
+  property: NotionDataSourcePropertySnapshot,
+): Record<string, unknown> {
+  if (
+    property.type !== 'select' &&
+    property.type !== 'multi_select' &&
+    property.type !== 'status'
+  ) {
+    return property.config
+  }
+  const { options: _options, ...config } = property.config
+  return config
+}
+
 export async function inspectNotionDataSource(
   config: InspectNotionDataSourceConfig,
 ): Promise<NotionDataSourceSnapshot> {
@@ -562,7 +585,7 @@ export function createNotionSchemaManifest(
         propertyId: property.id,
         name: property.name,
         type: property.type,
-        config: property.config,
+        config: manifestPropertyConfig(property),
         ...(property.options ? { options: property.options } : {}),
         ...(previous?.defaultValue !== undefined
           ? { defaultValue: previous.defaultValue }
@@ -600,6 +623,7 @@ export function createNotionSchemaManifest(
   }
 
   return {
+    $schema: existing?.$schema ?? NOTION_SCHEMA_MANIFEST_URL,
     version: 1,
     notionVersion: snapshot.notionVersion,
     dataSourceId: snapshot.dataSourceId,
@@ -965,6 +989,26 @@ export function formatNotionSchemaDiff(
           return `${marker} change ${operation.field.name}: ${operation.from} -> ${operation.to}`
         case 'update_options':
           return `${marker} update ${operation.field.name} options (add: ${operation.added.join(', ') || 'none'}; remove: ${operation.removed.join(', ') || 'none'})`
+      }
+    })
+    .join('\n')
+}
+
+export function formatNotionSchemaDrift(
+  operations: Array<NotionSchemaOperation>,
+): string {
+  if (!operations.length) return 'Schema is in sync.'
+  return operations
+    .map((operation) => {
+      switch (operation.kind) {
+        case 'add':
+          return `drift: ${JSON.stringify(operation.field.name)} is missing from Notion (expected ${operation.field.type})`
+        case 'rename':
+          return `drift: property ${operation.propertyId} is named ${JSON.stringify(operation.from)} in Notion; manifest expects ${JSON.stringify(operation.to)}`
+        case 'change_type':
+          return `drift: ${JSON.stringify(operation.field.name)} is ${operation.from} in Notion; manifest expects ${operation.to}`
+        case 'update_options':
+          return `drift: ${JSON.stringify(operation.field.name)} options differ (missing: ${operation.added.join(', ') || 'none'}; extra: ${operation.removed.join(', ') || 'none'})`
       }
     })
     .join('\n')

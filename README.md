@@ -1,14 +1,11 @@
 # TanStack DB Notion adapter
 
-Offline-first, typed TanStack DB collections backed by Notion data sources.
+Offline-first, end-to-end typed TanStack DB collections backed by Notion data
+sources. Reads and writes happen locally first; an ordered durable outbox then
+syncs through your authenticated server.
 
-Local reads and writes are immediate. Rows and pending mutations persist in
-IndexedDB, then synchronize through a server endpoint that keeps the Notion
-token out of the browser.
-
-> Release status: suitable for authenticated personal and small-team apps.
-> Multi-user OAuth provisioning, the full browser matrix, and distributed live
-> Notion testing remain outside the current release gate.
+Best suited to private, authenticated tools where Notion is the source of truth:
+task managers, journals, lightweight CRMs, and team workflows.
 
 ## Install
 
@@ -16,31 +13,92 @@ token out of the browser.
 npm install tanstack-db-notion-adapter @tanstack/react-db
 ```
 
-Requires Node 20.19 or newer for the server and CLI.
+The server and CLI require Node 20.19 or newer.
 
-## Connect a Notion data source
+## 1. Generate a typed schema
 
-Put server-only credentials in `.env`:
+Create a [Notion personal access token](https://developers.notion.com/guides/get-started/personal-access-tokens)
+for a user who can access the database, and keep it server-only:
 
 ```sh
 NOTION_PAT=ntn_...
-NOTION_DATA_SOURCE_ID=...
 ```
 
-Then inspect the existing source and generate a checked-in schema:
+Paste the database URL directly into `init`; the CLI resolves its data source ID:
 
 ```sh
 npx tanstack-db-notion init \
   --env .env \
+  --id "https://www.notion.so/your-workspace/Your-Database-..." \
   --manifest notion.schema.json \
   --out src/notion.generated.ts \
   --name todoSchema
 ```
 
-The generated row and input types include literal unions for Notion select and
-status options. Property IDs are stored alongside names so renames remain safe.
+Commit both generated files. The manifest stores stable property IDs, so a
+Notion-side rename does not break sync. It also contains the exact
+`dataSourceId`; copy that value to your server environment:
 
-## Create a collection
+```sh
+NOTION_DATA_SOURCE_ID=...
+```
+
+`init` plans a visible rich-text property named `Client ID` when the source does
+not already have one. Running `push` adds it. This is the adapter's stable key
+for offline inserts and idempotent reconciliation.
+
+## 2. Mount one server route
+
+The handler takes a standard Web `Request` and returns a Web `Response`. The
+browser and server must use the same generated schema. This complete Next.js
+App Router example is for localhost only:
+
+```ts
+import {
+  createMemoryNotionIdempotencyStore,
+  createNotionSyncHandler,
+} from 'tanstack-db-notion-adapter/server'
+import { todoSchema } from './notion.generated'
+
+const handler = createNotionSyncHandler({
+  token: process.env.NOTION_PAT!,
+  dataSourceId: process.env.NOTION_DATA_SOURCE_ID!,
+  schema: todoSchema,
+  idempotencyStore: createMemoryNotionIdempotencyStore(),
+  dangerouslyAllowUnauthenticated: true,
+})
+
+export const GET = handler
+export const POST = handler
+```
+
+Mount both methods at exactly the same path, such as `/api/todos`. The adapter
+uses query-string actions on that path for schema checks, invalidation, and page
+content; no additional routes are required.
+
+For production, replace `dangerouslyAllowUnauthenticated` with `authorize` and
+replace the memory store with a durable store shared by every writer. See
+[authentication](docs/authentication.md) and the
+[idempotency contract](docs/idempotency-store.md). For a read-only source, set
+`readOnly: true` and omit the idempotency store.
+`dangerouslyAllowEphemeralIdempotency: true` is also available for disposable
+single-process prototypes, but must never be used for production writes.
+
+If server code receives a database ID or URL instead of a data source ID, resolve
+it explicitly:
+
+```ts
+import { resolveNotionDataSourceId } from 'tanstack-db-notion-adapter/server'
+
+const dataSourceId = await resolveNotionDataSourceId({
+  token: process.env.NOTION_PAT!,
+  id: process.env.NOTION_DATABASE_ID_OR_URL!,
+})
+```
+
+Databases with multiple data sources are rejected with a list of valid choices.
+
+## 3. Create and use the collection
 
 ```ts
 import { createCollection } from '@tanstack/react-db'
@@ -56,125 +114,134 @@ export const todos = createCollection(
 )
 ```
 
-Mount the same schema behind an authenticated server route:
+TanStack DB mutations are optimistic and immediately durable:
 
 ```ts
-import { createNotionSyncHandler } from 'tanstack-db-notion-adapter/server'
-import { todoSchema } from './notion.generated'
-import { idempotencyStore } from './idempotency-store'
+todos.insert({ title: 'Ship it' })
 
-export const handleTodos = createNotionSyncHandler({
-  token: process.env.NOTION_PAT!,
-  dataSourceId: process.env.NOTION_DATA_SOURCE_ID!,
-  schema: todoSchema,
-  authorize: async (request) => Boolean(await getSession(request)),
-  idempotencyStore,
+todos.update(todo.id, (draft) => {
+  draft.completed = !draft.completed
 })
 ```
 
-The handler accepts a Web `Request` and returns a Web `Response`, so it works
-with Hono, TanStack Start, Next.js, Bun, Workers, and standard Node adapters.
-Production writes require an authorization callback and a durable idempotency
-store shared by every server instance.
+The generated `TodoSchemaInput` type is the draft shape for both inserts and
+updates. Fields with defaults may be optional. The generated `TodoSchemaRow`
+type is the complete synced row, including Notion metadata.
 
-## Query and mutate
+Use `useLiveQuery` normally; filtering, sorting, joins, and pagination operate
+against the local collection:
 
 ```tsx
-import { useLiveQuery } from '@tanstack/react-db'
-import { todos } from './todos'
+import { eq, useLiveQuery } from '@tanstack/react-db'
 
-export function TodoList() {
-  const { data = [] } = useLiveQuery((query) =>
-    query.from({ todo: todos }),
-  )
-
-  return data.map((todo) => (
-    <label key={todo.id}>
-      <input
-        type="checkbox"
-        checked={todo.completed}
-        onChange={() =>
-          todos.update(todo.id, (draft) => {
-            draft.completed = !draft.completed
-          })
-        }
-      />
-      {todo.title}
-    </label>
-  ))
-}
-
-todos.insert({ title: 'Ship it' })
+const { data: openTodos = [] } = useLiveQuery((query) =>
+  query
+    .from({ todo: todos })
+    .where(({ todo }) => eq(todo.completed, false)),
+)
 ```
 
-TanStack DB provides reactive local queries, indexes, joins, sorting, and
-pagination. The adapter adds IndexedDB hydration, an ordered durable outbox,
-cross-tab coordination, typed Notion serialization, retries, and conflict
-reporting.
+## Authenticated startup
 
-## Keep schemas in sync
+If the collection module loads before the user's session, prevent the initial
+request and resume only after authentication succeeds:
+
+```ts
+export const todos = createCollection(
+  notionCollectionOptions({
+    id: 'todos',
+    endpoint: '/api/todos',
+    schema: todoSchema,
+    autoStart: false,
+  }),
+)
+
+await todos.utils.resumeSync() // after login/session restoration
+todos.utils.pauseSync()        // before logout or an account switch
+```
+
+Pausing never clears cached rows or pending mutations. `syncNow()` remains an
+explicit one-off retry, and a successful retry clears an earlier sync error.
+
+## Schema changes
 
 ```sh
-# Preview changes without modifying Notion
+# Preview without changing Notion
 npx tanstack-db-notion push --dry-run --env .env --manifest notion.schema.json
 
-# Apply reviewed changes and regenerate TypeScript
+# Apply, pull stable IDs, and regenerate TypeScript
 npx tanstack-db-notion push \
-  --env .env \
-  --manifest notion.schema.json \
-  --out src/notion.generated.ts
+  --env .env --manifest notion.schema.json --out src/notion.generated.ts
 
-# Pull intentional Notion-side changes
+# Accept intentional Notion-side changes
 npx tanstack-db-notion pull \
-  --env .env \
-  --manifest notion.schema.json \
-  --out src/notion.generated.ts
+  --env .env --manifest notion.schema.json --out src/notion.generated.ts
 
-# Fail CI when the live source has drifted
+# Exit 1 when live Notion and the manifest differ
 npx tanstack-db-notion check --env .env --manifest notion.schema.json
 ```
 
-See [Schema workflow](docs/schema-workflow.md) and the
-[property support matrix](docs/PROPERTY_SUPPORT.md) for managed changes and
-type boundaries.
+Type changes and option removal require `--accept-data-loss`. See the
+[schema workflow](docs/schema-workflow.md) and
+[property support matrix](docs/PROPERTY_SUPPORT.md).
 
 ## Page contents
 
-Database properties and page bodies use separate Notion APIs. For editors,
-enable `pageContent` on the server and create a lazy content client:
+Database properties and page bodies are separate Notion APIs. Enable
+`pageContent: true` on the server, then create a lazy client:
 
 ```ts
 import { createNotionPageContentClient } from 'tanstack-db-notion-adapter'
 
-export const noteContent = createNotionPageContentClient({
+const noteContent = createNotionPageContentClient({
   id: 'notes',
   endpoint: '/api/notes',
   debounceMs: 750,
+  autoStart: false,
 })
 ```
 
-Drafts persist locally on every edit. Remote writes are debounced, and content
-conflicts retain both versions instead of silently overwriting either one.
+For an authenticated app, call `noteContent.resumeSync()` with the collection
+after session restoration and `noteContent.pauseSync()` before logout. Omit
+`autoStart` when the endpoint is ready as soon as the client loads.
 
-## Production boundaries
+The lifecycle is explicit:
 
-- Keep `NOTION_PAT` on the server; never use a client-exposed environment name.
-- Protect every sync route and scope each user to allowed data sources.
-- Use a shared durable idempotency store for every production writer.
-- Treat browser storage as private application data and clear it on account changes.
-- Use exact data source IDs. Ambiguous multi-source database IDs are rejected.
-- Notion-hosted file URLs expire and are not durable offline media.
+```ts
+const id = crypto.randomUUID()
+notes.insert({ id, title: 'New note' })
+await noteContent.createDraft(id, '# New note')
 
-Read [Authentication](docs/authentication.md),
-[Errors and recovery](docs/errors-and-recovery.md), and
-[Operations](docs/operations.md) before using production data.
+// Once the synced row contains its Notion page ID:
+await noteContent.attachPage(id, note.notionPageId)
+
+await noteContent.load(note.id, note.notionPageId) // existing page
+await noteContent.update(note.id, nextMarkdown)    // local save + debounced flush
+await noteContent.flush(note.id)                   // explicit retry/save-now
+```
+
+Pending attached drafts retry after recreation and when connectivity returns.
+Conflicts retain both versions; resolve with `acceptRemote` or the explicit
+`overwriteRemote({ acceptDataLoss: true })` escape hatch.
+
+## Offline boundary
+
+The adapter persists collection rows, pending mutations, and page drafts in
+browser storage. To reload the application itself with no network, the host app
+must also cache its HTML and assets with a service worker or equivalent app-shell
+strategy.
+
+Keep the Notion token off the client, authorize every production request, clear
+private browser data on account changes, and remember that Notion-hosted file
+URLs expire. See [errors and recovery](docs/errors-and-recovery.md) and
+[production operations](docs/operations.md).
 
 ## Examples
 
-- [`examples/todos`](examples/todos): typed properties, local queries, pagination, and mutations.
-- [`examples/notes`](examples/notes): lazy page contents, debounced saves, and content conflicts.
-- [`examples/reliability`](examples/reliability): executable storage, concurrency, idempotency, and conflict checks.
-- [`apps/todo`](apps/todo): a larger authenticated offline task app used as the production acceptance harness.
+- [`examples/todos`](examples/todos): typed properties and mutations.
+- [`examples/notes`](examples/notes): debounced page contents and conflicts.
+- [`examples/reliability`](examples/reliability): executable reliability checks.
+- [`apps/todo`](apps/todo): authenticated production acceptance harness.
 
 ## License
 
