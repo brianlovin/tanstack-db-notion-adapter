@@ -358,6 +358,10 @@ interface NotionListResponse {
   results?: Array<unknown>
   has_more?: boolean
   next_cursor?: string | null
+  request_status?: {
+    type?: unknown
+    incomplete_reason?: unknown
+  }
 }
 
 interface NotionPropertyItemListResponse {
@@ -470,6 +474,16 @@ function parseRetryAfter(response: Response): number | null {
 
 function retryableStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 429 || status >= 500
+}
+
+function canRetryNotionRequest(
+  operation: NotionServerEvent['operation'],
+  error: unknown,
+): boolean {
+  if (operation !== 'page.create') {
+    return !(error instanceof NotionHttpError) || error.retryable
+  }
+  return error instanceof NotionHttpError && error.status === 429
 }
 
 function sleep(milliseconds: number, signal?: AbortSignal): Promise<void> {
@@ -1188,7 +1202,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
         const canRetry =
           attempt < maxRetries &&
           !init.signal?.aborted &&
-          (!(error instanceof NotionHttpError) || error.retryable)
+          canRetryNotionRequest(operation, error)
         if (!canRetry) {
           emit({
             type: 'notion_request',
@@ -1299,12 +1313,27 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
   const queryPages = async (
     body: Record<string, unknown>,
     signal?: AbortSignal,
-  ): Promise<NotionListResponse> =>
-    requestNotion<NotionListResponse>(queryPath(), {
+  ): Promise<NotionListResponse> => {
+    const response = await requestNotion<NotionListResponse>(queryPath(), {
       method: 'POST',
       body: JSON.stringify(body),
       ...(signal ? { signal } : {}),
     })
+    if (
+      response.request_status?.type === 'incomplete' &&
+      response.request_status.incomplete_reason ===
+        'query_result_limit_reached'
+    ) {
+      throw new NotionHttpError({
+        status: 422,
+        code: 'notion_query_result_limit',
+        message:
+          'Notion truncated this query at 10,000 matching pages. Narrow the collection filter or split the data into multiple collections before syncing.',
+        retryable: false,
+      })
+    }
+    return response
+  }
 
   const completePageProperty = async (
     page: NotionPageLike,
@@ -1441,10 +1470,13 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     }
   }
 
-  const findPageByKey = async (
-    key: string,
+  const findPagesByKeys = async (
+    keys: ReadonlyArray<string>,
     signal?: AbortSignal,
-  ): Promise<NotionPageLike | null> => {
+  ): Promise<Map<string, NotionPageLike>> => {
+    const requestedKeys = new Set(keys)
+    const pagesByKey = new Map<string, NotionPageLike>()
+    if (requestedKeys.size === 0) return pagesByKey
     if (!idPropertyName || !idPropertyReference) {
       throw new NotionHttpError({
         status: 405,
@@ -1453,28 +1485,65 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
         retryable: false,
       })
     }
-    const keyFilter = {
+
+    const keyFilters = [...requestedKeys].map((key) => ({
       property: idPropertyReference,
       rich_text: { equals: key },
-    }
-    const response = await queryPages({
-      page_size: 2,
-      filter: fixedFilter
-        ? {
-            and: [keyFilter, structuredClone(fixedFilter)],
-          }
-        : keyFilter,
-    }, signal)
-    const pages = (response.results ?? []).filter(isPage)
-    if (pages.length > 1) {
-      throw new NotionHttpError({
-        status: 409,
-        code: 'duplicate_client_id',
-        message: `More than one Notion page has the same ${idPropertyName} value.`,
-        retryable: false,
-      })
-    }
-    return pages[0] ?? null
+    }))
+    const keyFilter =
+      keyFilters.length === 1 ? keyFilters[0]! : { or: keyFilters }
+    const filter = fixedFilter
+      ? { and: [keyFilter, structuredClone(fixedFilter)] }
+      : keyFilter
+    const seenCursors = new Set<string>()
+    let cursor: string | null = null
+    do {
+      const response = await queryPages(
+        {
+          page_size: 100,
+          filter,
+          ...(cursor ? { start_cursor: cursor } : {}),
+        },
+        signal,
+      )
+      for (const page of (response.results ?? []).filter(isPage)) {
+        const key = config.schema.getKey(config.schema.parsePage(page))
+        if (!requestedKeys.has(key)) continue
+        if (pagesByKey.has(key)) {
+          throw new NotionHttpError({
+            status: 409,
+            code: 'duplicate_client_id',
+            message: `More than one Notion page has the same ${idPropertyName} value.`,
+            retryable: false,
+          })
+        }
+        pagesByKey.set(key, page)
+      }
+      cursor =
+        response.has_more === true && typeof response.next_cursor === 'string'
+          ? response.next_cursor
+          : null
+      if (cursor) {
+        if (seenCursors.has(cursor)) {
+          throw new NotionHttpError({
+            status: 502,
+            code: 'repeated_query_cursor',
+            message: 'Notion repeated a pagination cursor during a key lookup.',
+            retryable: true,
+          })
+        }
+        seenCursors.add(cursor)
+      }
+    } while (cursor)
+    return pagesByKey
+  }
+
+  const findPageByKey = async (
+    key: string,
+    signal?: AbortSignal,
+  ): Promise<NotionPageLike | null> => {
+    const pages = await findPagesByKeys([key], signal)
+    return pages.get(key) ?? null
   }
 
   const resolvePage = async (
@@ -1522,10 +1591,13 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
   const applyMutation = async (
     mutation: NotionMutation<TItem>,
     signal?: AbortSignal,
+    prefetchedInsertPages?: Map<string, NotionPageLike>,
   ): Promise<{ row?: TItem; deletedKey?: string }> => {
     switch (mutation.type) {
       case 'insert': {
-        const existing = await findPageByKey(mutation.key, signal)
+        const existing = prefetchedInsertPages
+          ? (prefetchedInsertPages.get(mutation.key) ?? null)
+          : await findPageByKey(mutation.key, signal)
         if (existing) {
           const row = config.schema.parsePage(existing)
           if (
@@ -1562,6 +1634,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
             retryable: true,
           })
         }
+        prefetchedInsertPages?.set(mutation.key, created)
         return { row: config.schema.parsePage(created) }
       }
       case 'update': {
@@ -1648,9 +1721,8 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
       })
     }
 
-    const rows: Array<TItem> = []
-    const deletedKeys: Array<string> = []
-    for (const [mutationIndex, mutation] of batch.mutations.entries()) {
+    const normalizedMutations: Array<NotionMutation<TItem>> = []
+    for (const mutation of batch.mutations) {
       if (
         !mutation ||
         typeof mutation !== 'object' ||
@@ -1710,7 +1782,10 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
           validation.issues,
         )
       }
-      const normalized = { ...mutation, value: validation.value }
+      const normalized = {
+        ...mutation,
+        value: validation.value,
+      } as NotionMutation<TItem>
       if (config.schema.getKey(normalized.value) !== mutation.key) {
         throw new NotionHttpError({
           status: 400,
@@ -1719,6 +1794,18 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
           retryable: false,
         })
       }
+      normalizedMutations.push(normalized)
+    }
+
+    const prefetchedInsertPages = await findPagesByKeys(
+      normalizedMutations
+        .filter((mutation) => mutation.type === 'insert')
+        .map((mutation) => mutation.key),
+      signal,
+    )
+    const rows: Array<TItem> = []
+    const deletedKeys: Array<string> = []
+    for (const [mutationIndex, normalized] of normalizedMutations.entries()) {
 
       const executeMutation = async () =>
         normalized.type === 'insert' && idempotencyStore
@@ -1730,9 +1817,10 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
                   config.schema.serialize(normalized.value),
                 ),
               },
-              () => applyMutation(normalized, signal),
+              () =>
+                applyMutation(normalized, signal, prefetchedInsertPages),
             )
-          : await applyMutation(normalized, signal)
+          : await applyMutation(normalized, signal, prefetchedInsertPages)
       const result = idempotencyStore
         ? await idempotencyStore.execute(
             {

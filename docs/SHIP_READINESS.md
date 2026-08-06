@@ -158,10 +158,20 @@ lost response can silently lose an acknowledged edit or create a duplicate.
 
 - [x] Replace per-handler rate limiting with a shared/pluggable limiter suitable
   for serverless and multi-process deployments.
+- [x] Coalesce insert reconciliation into one client-ID query per mutation
+  batch, while preserving durable per-key idempotency and lost-response
+  recovery.
+- [x] Reject Notion's incomplete 10,000-result response instead of publishing a
+  silently truncated collection snapshot.
 - [x] Add webhook-assisted invalidation while retaining polling as recovery.
 - [x] Offer progressive materialization for large read-only sources, with an
   atomic persisted page/cursor checkpoint and loaded-window refresh. Filter
   pushdown and mutable partial snapshots remain future work.
+- [ ] Add a durable incremental refresh/tombstone protocol before claiming
+  frequently changing 10,000-row mutable collections as an optimized use case;
+  webhook invalidation currently triggers a complete filtered refresh.
+- [ ] Define an explicit partition cursor and merge contract before representing
+  more than 10,000 matching Notion pages as one logical collection.
 - [x] Skip unchanged collection updates during refresh.
 - [ ] Add OAuth for multi-user/public products; personal access tokens remain a
   developer and personal-workspace workflow.
@@ -408,6 +418,10 @@ history remain available in Git.
 - **2026-08-06:** Authenticated apps may hydrate immediately but can defer all
   automatic collection and page-content requests with `autoStart: false`, then
   explicitly resume after session restoration.
+- **2026-08-06:** One collection never treats Notion's 10,000-result query cap
+  as a complete snapshot. Larger sources use explicit disjoint filters or
+  separate data sources until safe automatic partitioning has a defined cursor
+  and mutable-snapshot model.
 
 ## External constraints to keep checking
 

@@ -40,7 +40,16 @@ row values and must receive the same privacy controls as application data.
 
 The handler checkpoints the whole batch, each mutation within the batch, and
 the stable client ID of each insert. The final identity checkpoint prevents two
-different browser transactions from concurrently creating the same row.
+different browser transactions from concurrently creating the same row. One
+compound preflight query resolves every insert key in a batch; page creation
+then remains sequential and each successful create updates the preflight map.
+
+A page-create request is not automatically retried after an ambiguous timeout,
+network failure, or server error. Notion may have committed the page even when
+the response never arrived. The failed callback releases its claim, and the
+next durable outbox attempt repeats the client-ID lookup before deciding whether
+to create. An explicit Notion 429 throttling response may still be retried using
+the server's retry policy.
 
 ## Backend guidance
 

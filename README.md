@@ -242,6 +242,12 @@ Advanced paths and destructive changes are covered in the
 For authenticated startup, offline app-shell caching, and other framework
 details, see [framework integration](docs/frameworks.md).
 
+Local queries stay fast across thousands of cached rows. Notion limits one
+data-source query to 10,000 matching pages; the adapter fails closed at that
+boundary instead of silently returning partial data. See
+[large data sources](docs/large-datasets.md) for filtering, progressive reads,
+bulk-write costs, and refresh budgets.
+
 ## License
 
 MIT

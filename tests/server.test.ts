@@ -40,10 +40,29 @@ function createFakeNotion() {
     }
 
     if (method === 'POST' && url.pathname.endsWith('/query')) {
-      const key = body?.filter?.rich_text?.equals as string | undefined
-      const results = key
+      const keys = new Set<string>()
+      const collectKeys = (filter: unknown): void => {
+        if (!filter || typeof filter !== 'object' || Array.isArray(filter)) return
+        const record = filter as Record<string, unknown>
+        const richText = record.rich_text
+        if (
+          (record.property === 'Client ID' || record.property === 'client-id') &&
+          richText &&
+          typeof richText === 'object' &&
+          !Array.isArray(richText) &&
+          typeof (richText as Record<string, unknown>).equals === 'string'
+        ) {
+          keys.add((richText as { equals: string }).equals)
+        }
+        for (const operator of ['and', 'or'] as const) {
+          const children = record[operator]
+          if (Array.isArray(children)) children.forEach(collectKeys)
+        }
+      }
+      collectKeys(body?.filter)
+      const results = keys.size > 0
         ? [...pages.values()].filter(
-            (page) => testSchema.parsePage(page).id === key && !page.in_trash,
+            (page) => keys.has(testSchema.parsePage(page).id) && !page.in_trash,
           )
         : [...pages.values()].filter((page) => !page.in_trash)
       return Response.json({ results, has_more: false, next_cursor: null })
@@ -934,6 +953,121 @@ describe('createNotionSyncHandler', () => {
     expect(trashCall?.body).toEqual({ in_trash: true })
   })
 
+  it('coalesces a full insert batch into one duplicate lookup', async () => {
+    const notion = createFakeNotion()
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      authorize: () => true,
+      idempotencyStore: createMemoryNotionIdempotencyStore(),
+    })
+    const rows = Array.from({ length: 50 }, (_, index) =>
+      testTodo({ id: `bulk-${index}`, title: `Bulk task ${index}` }),
+    )
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'bulk-insert',
+          mutations: rows.map((row) => ({
+            type: 'insert',
+            key: row.id,
+            value: row,
+          })),
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(notion.createCount).toBe(50)
+    const lookups = notion.calls.filter(
+      ({ method, url }) => method === 'POST' && url.pathname.endsWith('/query'),
+    )
+    expect(lookups).toHaveLength(1)
+    expect(lookups[0]?.body.filter.or).toHaveLength(50)
+  })
+
+  it('reconciles existing insert keys with one batch lookup', async () => {
+    const notion = createFakeNotion()
+    const existing = testTodo({ id: 'already-there', notionPageId: 'existing-page' })
+    notion.pages.set('existing-page', notionPage(existing, 'existing-page'))
+    const created = testTodo({ id: 'new-row', title: 'Create me' })
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      authorize: () => true,
+      idempotencyStore: createMemoryNotionIdempotencyStore(),
+    })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'mixed-insert',
+          mutations: [existing, created].map((row) => ({
+            type: 'insert',
+            key: row.id,
+            value: row,
+          })),
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(notion.createCount).toBe(1)
+    expect(
+      notion.calls.filter(
+        ({ method, url }) => method === 'POST' && url.pathname.endsWith('/query'),
+      ),
+    ).toHaveLength(1)
+  })
+
+  it('fails closed when Notion truncates a query at its result limit', async () => {
+    const fetch = vi.fn(async () =>
+      Response.json({
+        results: [],
+        has_more: false,
+        next_cursor: null,
+        request_status: {
+          type: 'incomplete',
+          incomplete_reason: 'query_result_limit_reached',
+        },
+      }),
+    )
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: fetch as typeof globalThis.fetch,
+      validateSchema: false,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      authorize: () => true,
+      readOnly: true,
+    })
+
+    const response = await handler(new Request('http://app.test/api/todos'))
+
+    expect(response.status).toBe(422)
+    expect(await response.json()).toEqual({
+      error: {
+        code: 'notion_query_result_limit',
+        message:
+          'Notion truncated this query at 10,000 matching pages. Narrow the collection filter or split the data into multiple collections before syncing.',
+        retryable: false,
+      },
+    })
+  })
+
   it('serializes the same insert across handler instances and replays its result', async () => {
     const notion = createFakeNotion()
     const idempotencyStore = createMemoryNotionIdempotencyStore()
@@ -1071,7 +1205,6 @@ describe('createNotionSyncHandler', () => {
       schema: testSchema,
       fetch: fetch as typeof globalThis.fetch,
       minimumRequestIntervalMs: 0,
-      maxRetries: 0,
       authorize: () => true,
       idempotencyStore: createMemoryNotionIdempotencyStore(),
     })
@@ -1093,6 +1226,53 @@ describe('createNotionSyncHandler', () => {
     )
 
     expect(retry.status).toBe(200)
+    expect(notion.createCount).toBe(1)
+  })
+
+  it('retries an explicitly rate-limited page create', async () => {
+    const notion = createFakeNotion()
+    let createAttempts = 0
+    const fetch = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === 'string' || input instanceof URL ? input : input.url,
+        )
+        if (init?.method === 'POST' && url.pathname === '/v1/pages') {
+          createAttempts += 1
+          if (createAttempts === 1) {
+            return Response.json(
+              { code: 'rate_limited', message: 'Slow down' },
+              { status: 429, headers: { 'Retry-After': '0' } },
+            )
+          }
+        }
+        return notion.fetch(input, init)
+      },
+    )
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: fetch as typeof globalThis.fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 1,
+      authorize: () => true,
+      idempotencyStore: createMemoryNotionIdempotencyStore(),
+    })
+    const row = testTodo({ id: 'rate-limited-create' })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'rate-limited-create',
+          mutations: [{ type: 'insert', key: row.id, value: row }],
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(createAttempts).toBe(2)
     expect(notion.createCount).toBe(1)
   })
 

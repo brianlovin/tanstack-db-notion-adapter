@@ -42,8 +42,17 @@ move to quarantine; they are never silently replaced by an empty envelope.
 The server runs each batch and each individual mutation through a durable
 idempotency-store contract. The store is shared across handler instances and
 persists successful results. Individual checkpoints make partial batch retries
-safe. Insert recovery also queries the stable client ID when the response from
-Notion itself disappears after page creation.
+safe. Before executing inserts, one compound query resolves all stable client
+IDs in the batch; newly created pages are added to that result as execution
+continues. This keeps duplicate prevention at one lookup per batch instead of
+one lookup per row. If a page-create response disappears, the handler does not
+blindly repeat the ambiguous create request. The next outbox attempt performs
+the lookup again and recovers the page Notion already created.
+
+Notion marks queries that exceed its 10,000-result pagination depth as
+incomplete. The server rejects such a response rather than publishing a
+partial snapshot as complete. Larger logical datasets must be divided into
+explicit filtered collections or separate data sources.
 
 Updates carry only the TanStack transaction's changed fields and the values on
 which those changes were based. The server reads the current page, applies

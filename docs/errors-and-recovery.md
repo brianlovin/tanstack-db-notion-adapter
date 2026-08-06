@@ -32,6 +32,9 @@ Discard is a data-loss operation and should require a user confirmation. Show
   explicitly overwrite with `acceptDataLoss: true`.
 - `page_content_incomplete`: leave replacement disabled. Implement a targeted
   block-API editor for the unsupported content.
+- `notion_query_result_limit`: Notion truncated a query at 10,000 matching
+  pages. Narrow the handler's fixed filter or split the logical source into
+  explicit collections; never treat the partial result as complete.
 - `storage_revision_conflict`: another tab or writer won the local compare-and-
   set. Reload state under the collection lock and retry.
 - storage unavailable: reject mutations unless the app intentionally enabled

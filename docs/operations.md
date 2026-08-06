@@ -6,8 +6,11 @@ Pass one shared `NotionRateLimiter` to every handler using the same Notion
 connection and `rateLimitScope`. `createMemoryNotionRateLimiter()` coordinates
 one JavaScript process. Serverless and multi-process deployments need a shared
 scheduler backed by infrastructure such as Redis, a durable actor, or a queue.
-The handler also honors retryable responses, `Retry-After`, capped backoff, and
-per-request timeouts.
+The handler honors `Retry-After`, capped backoff, and per-request timeouts.
+Idempotent requests retry transient failures. Page creation retries explicit
+429 throttling responses, but an ambiguous timeout, network failure, or
+server error returns to the durable outbox so the next attempt can reconcile by
+client ID before creating again.
 
 ## Idempotency
 
