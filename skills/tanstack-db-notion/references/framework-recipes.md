@@ -33,7 +33,6 @@ providing mutation idempotency infrastructure:
 ```ts
 const sync = createNotionSyncHandler({
   token: process.env.NOTION_PAT!,
-  dataSourceId: process.env.NOTION_DATA_SOURCE_ID!,
   schema: feedSchema,
   readOnly: true,
   authorize: () => true,

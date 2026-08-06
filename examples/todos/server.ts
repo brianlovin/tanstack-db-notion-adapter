@@ -1,10 +1,7 @@
 import { serve } from '@hono/node-server'
 import { config as loadEnv } from 'dotenv'
 import { Hono } from 'hono'
-import {
-  createNotionSyncHandler,
-  resolveNotionDataSourceId,
-} from 'tanstack-db-notion-adapter/server'
+import { createNotionSyncHandler } from 'tanstack-db-notion-adapter/server'
 import { todoSchema } from './src/notion.generated'
 
 loadEnv({ path: new URL('.env.local', import.meta.url), quiet: true })
@@ -12,19 +9,12 @@ loadEnv({ path: new URL('.env', import.meta.url), quiet: true })
 
 const app = new Hono()
 const token = process.env.NOTION_PAT ?? process.env.NOTION_TOKEN
-const configuredId =
-  process.env.NOTION_DATA_SOURCE_ID ?? process.env.NOTION_DATABASE_ID
 let configurationError: string | null = null
 
-if (token && configuredId) {
+if (token) {
   try {
-    const dataSourceId = await resolveNotionDataSourceId({
-      token,
-      id: configuredId,
-    })
     const sync = createNotionSyncHandler({
       token,
-      dataSourceId,
       schema: todoSchema,
       // This example binds to localhost and has no user accounts. Real apps
       // should provide `authorize` and protect each user's data-source access.

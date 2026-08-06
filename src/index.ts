@@ -18,6 +18,7 @@ export {
   type NotionRichTextItem,
   type NotionRollupValue,
   type NotionSchema,
+  type NotionSchemaOptions,
   type NotionUniqueIdValue,
   type NotionUserReference,
 } from './schema.js'

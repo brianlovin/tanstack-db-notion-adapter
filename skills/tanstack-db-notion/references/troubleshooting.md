@@ -3,8 +3,9 @@
 ## `not_configured`
 
 Confirm the server process loaded `NOTION_PAT` (or the legacy `NOTION_TOKEN`)
-and one of `NOTION_DATA_SOURCE_ID` / `NOTION_DATABASE_ID`. Do not expose or log
-their values. Restart the server after changing env files.
+and the generated schema contains a data source ID. A hand-written schema must
+instead pass `dataSourceId` to the handler. Do not expose or log tokens. Restart
+the server after changing env files.
 
 ## Ambiguous database
 

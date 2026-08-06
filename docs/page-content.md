@@ -10,7 +10,7 @@ Enable content routes on the server:
 ```ts
 // server/api/notes.ts — server
 const sync = createNotionSyncHandler({
-  // token, dataSourceId, schema, authorization, and idempotency...
+  // token, generated schema, authorization, and idempotency...
   pageContent: true,
 })
 ```
@@ -91,6 +91,9 @@ export const noteContent = createNotionPageContentClient({
 
 Notion aggregates these events and says delivery can take several minutes, so
 focus and periodic revalidation remain useful fallbacks.
+
+Notion normalizes Markdown through its block model. Equivalent content can
+return with different whitespace, such as blank lines removed between blocks.
 
 ## Conflicts and offline behavior
 

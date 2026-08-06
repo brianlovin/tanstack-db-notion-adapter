@@ -40,6 +40,16 @@ export async function updateEnvFile(
   await writeFile(path, `${lines.join('\n')}\n`, { mode: 0o600 })
 }
 
+export async function saveInitEnvironment(
+  path: string,
+  values: { dataSourceId: string; promptedToken?: string },
+): Promise<void> {
+  await updateEnvFile(path, {
+    ...(values.promptedToken ? { NOTION_PAT: values.promptedToken } : {}),
+    NOTION_DATA_SOURCE_ID: values.dataSourceId,
+  })
+}
+
 export async function ignoreDefaultEnvFile(path: string): Promise<void> {
   if (basename(path) !== '.env.local') return
   const gitignorePath = resolve(dirname(path), '.gitignore')

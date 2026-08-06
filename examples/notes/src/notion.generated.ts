@@ -11,7 +11,7 @@ export const noteSchema = notionSchema({
   updatedAt: notion.lastEditedTime(),
   notionPageId: notion.pageId(),
   notionUrl: notion.pageUrl(),
-})
+}, { dataSourceId: "3b2c711c-0ceb-80df-b2f2-000ba7723002" })
 
 export type NoteSchemaInput = InferNotionInput<
   typeof noteSchema.fields

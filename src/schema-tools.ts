@@ -336,6 +336,17 @@ export type NotionSchemaOperation =
       destructive: boolean
       supported: boolean
     }
+  | {
+      kind: 'remote_addition'
+      field: NotionManifestProperty
+      destructive: false
+      supported: false
+    }
+
+export interface DiffNotionSchemaOptions {
+  /** Include properties that exist in Notion but are absent from the manifest. */
+  includeRemoteAdditions?: boolean
+}
 
 const directlyManagedTypes = new Set<NotionDataSourcePropertyType>([
   'rich_text',
@@ -732,7 +743,9 @@ export function generateNotionSchemaSource(
     `  ${manifest.metadata.lastEditedTime}: notion.lastEditedTime(),`,
     `  ${manifest.metadata.pageId}: notion.pageId(),`,
     `  ${manifest.metadata.pageUrl}: notion.pageUrl(),`,
-    '})',
+    manifest.dataSourceId
+      ? `}, { dataSourceId: ${quote(manifest.dataSourceId)} })`
+      : '})',
     '',
     `export type ${manifest.exportName[0]!.toUpperCase()}${manifest.exportName.slice(1)}Input = InferNotionInput<`,
     `  typeof ${manifest.exportName}.fields`,
@@ -789,9 +802,11 @@ function canManage(field: NotionManifestProperty): boolean {
 export function diffNotionSchema(
   manifest: NotionSchemaManifest,
   snapshot: NotionDataSourceSnapshot,
+  options: DiffNotionSchemaOptions = {},
 ): Array<NotionSchemaOperation> {
   const operations: Array<NotionSchemaOperation> = []
-  for (const field of manifestFields(manifest)) {
+  const fields = manifestFields(manifest)
+  for (const field of fields) {
     const remote = findRemoteProperty(field, snapshot)
     if (!remote) {
       operations.push({
@@ -843,6 +858,28 @@ export function diffNotionSchema(
           removed,
           destructive: removed.length > 0,
           supported: field.type !== 'status',
+        })
+      }
+    }
+  }
+  if (options.includeRemoteAdditions) {
+    for (const property of snapshot.properties) {
+      const tracked = fields.some((field) =>
+        findRemoteProperty(field, { ...snapshot, properties: [property] }),
+      )
+      if (!tracked) {
+        operations.push({
+          kind: 'remote_addition',
+          field: {
+            key: identifier(property.name, 'field'),
+            propertyId: property.id,
+            name: property.name,
+            type: property.type,
+            ...(property.options ? { options: property.options } : {}),
+            config: property.config,
+          },
+          destructive: false,
+          supported: false,
         })
       }
     }
@@ -928,13 +965,17 @@ export async function pushNotionSchema(
       properties[operation.propertyId] = {
         [operation.to]: schemaConfig(operation.field),
       }
-    } else {
+    } else if (operation.kind === 'update_options') {
       const remote = snapshot.properties.find((property) =>
         propertyIdMatches(property.id, operation.propertyId),
       )!
       properties[operation.propertyId] = {
         [operation.field.type]: updateOptionsConfig(operation.field, remote),
       }
+    } else {
+      throw new Error(
+        `Pull ${JSON.stringify(operation.field.name)} into the manifest before pushing.`,
+      )
     }
   }
 
@@ -989,6 +1030,8 @@ export function formatNotionSchemaDiff(
           return `${marker} change ${operation.field.name}: ${operation.from} -> ${operation.to}`
         case 'update_options':
           return `${marker} update ${operation.field.name} options (add: ${operation.added.join(', ') || 'none'}; remove: ${operation.removed.join(', ') || 'none'})`
+        case 'remote_addition':
+          return `${marker} pull ${operation.field.name} (${operation.field.type}) from Notion`
       }
     })
     .join('\n')
@@ -1009,6 +1052,8 @@ export function formatNotionSchemaDrift(
           return `drift: ${JSON.stringify(operation.field.name)} is ${operation.from} in Notion; manifest expects ${operation.to}`
         case 'update_options':
           return `drift: ${JSON.stringify(operation.field.name)} options differ (missing: ${operation.added.join(', ') || 'none'}; extra: ${operation.removed.join(', ') || 'none'})`
+        case 'remote_addition':
+          return `drift: ${JSON.stringify(operation.field.name)} exists in Notion but is not tracked by the manifest`
       }
     })
     .join('\n')

@@ -207,6 +207,39 @@ describe('Notion schema tooling', () => {
     expect(formatNotionSchemaDrift(operations)).not.toContain('+ rename')
   })
 
+  it('detects Notion-only properties in strict drift checks without planning their removal', () => {
+    const remote = {
+      ...blankSnapshot,
+      properties: [
+        ...blankSnapshot.properties,
+        { id: 'location-id', name: 'Location', type: 'rich_text' as const, config: {} },
+      ],
+    }
+
+    expect(diffNotionSchema(todoManifest(), remote)).not.toContainEqual(
+      expect.objectContaining({ kind: 'remote_addition' }),
+    )
+
+    const strict = diffNotionSchema(todoManifest(), remote, {
+      includeRemoteAdditions: true,
+    })
+    expect(strict).toContainEqual(
+      expect.objectContaining({
+        kind: 'remote_addition',
+        field: expect.objectContaining({
+          name: 'Location',
+          propertyId: 'location-id',
+          type: 'rich_text',
+        }),
+        destructive: false,
+        supported: false,
+      }),
+    )
+    expect(formatNotionSchemaDrift(strict)).toContain(
+      '"Location" exists in Notion but is not tracked by the manifest',
+    )
+  })
+
   it('introspects complex properties with typed codecs and preserves unknown types', async () => {
     const fetch = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(
@@ -254,6 +287,7 @@ describe('Notion schema tooling', () => {
     expect(source).toContain(
       'notion.formula({ name: "Score", id: "score-id" })',
     )
+    expect(source).toContain('}, { dataSourceId: "source-1" })')
     expect(source).toContain('type NotionDataSourceSchemaInput = InferNotionInput<')
     expect(snapshot.properties[2]).toMatchObject({
       id: 'future-id',

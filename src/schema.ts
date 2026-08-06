@@ -205,6 +205,8 @@ export interface NotionSchema<TFields extends NotionFields>
     InferNotionOutput<TFields>
   > {
   readonly fields: TFields
+  /** Non-secret source identity emitted by schema generation for server setup. */
+  readonly dataSourceId: string | null
   readonly idField: keyof TFields & string
   readonly titleField: keyof TFields & string
   parsePage: (page: NotionPageLike) => InferNotionOutput<TFields>
@@ -215,6 +217,11 @@ export interface NotionSchema<TFields extends NotionFields>
   getKey: (row: InferNotionOutput<TFields>) => string
   getPageId: (row: InferNotionOutput<TFields>) => string | null
   expectedProperties: () => ReadonlyArray<ExpectedNotionProperty>
+}
+
+export interface NotionSchemaOptions {
+  /** Non-secret source identity. Generated schemas populate this from the manifest. */
+  dataSourceId?: string
 }
 
 type OptionalStringField = NotionField<string, string, true>
@@ -1152,6 +1159,7 @@ function pageProperty(
 
 export function notionSchema<const TFields extends NotionFields>(
   fields: TFields,
+  options: NotionSchemaOptions = {},
 ): NotionSchema<TFields> {
   const entries = Object.entries(fields) as Array<
     [keyof TFields & string, TFields[keyof TFields]]
@@ -1219,6 +1227,7 @@ export function notionSchema<const TFields extends NotionFields>(
 
   const schema: NotionSchema<TFields> = {
     fields,
+    dataSourceId: options.dataSourceId?.trim() || null,
     idField,
     titleField,
     '~standard': {

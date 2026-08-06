@@ -42,6 +42,9 @@ The CLI loads `.env.local` and `.env`, prompts for missing credentials, and
 uses `notion.schema.json` plus `src/notion.generated.ts` by convention. Use
 flags only when the repository layout requires an override.
 
+Coding agents normally have no TTY. Put `NOTION_PAT` in `.env.local`, then run
+`npx tanstack-db-notion init --id "<database URL or ID>"` non-interactively.
+
 For a code-first project, create or edit the checked-in manifest and generate:
 
 ```sh
@@ -55,7 +58,9 @@ they keep a field stable when its display name changes.
 Accept an exact data source ID, database ID, or pasted Notion database URL. A
 database is safe only when it resolves to one data source. If Notion returns
 multiple sources, list the choices and ask the user to select one; never guess.
-Use `resolveNotionDataSourceId()` for the same resolution in server setup.
+Generated schemas retain the resolved, non-secret data source ID for server
+setup. Use `resolveNotionDataSourceId()` only for a hand-written schema or when
+choosing a source dynamically.
 
 ## Evolve safely
 
@@ -72,7 +77,7 @@ Use `resolveNotionDataSourceId()` for the same resolution in server setup.
    property used as the stable offline sync key.
 5. Apply a push only after the dry run is clean. Obtain explicit user approval
    before any command that accepts data loss.
-6. Run `check` in CI to detect drift.
+6. Run `check` in CI to detect drift, including properties added only in Notion.
 
 If a field is raw, lossy, truncated, or unsupported, keep that limitation
 visible in types and documentation. Do not silently omit it.
@@ -93,7 +98,6 @@ Use the same generated schema on both sides:
 ```ts
 const handleItems = createNotionSyncHandler({
   token: process.env.NOTION_PAT!,
-  dataSourceId: process.env.NOTION_DATA_SOURCE_ID!,
   schema: projectSchema,
   authorize: authorizeRequest,
   idempotencyStore: durableIdempotencyStore,

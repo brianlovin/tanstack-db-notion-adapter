@@ -28,16 +28,32 @@ with the complete setup and safety workflow.
 
 ## Quick start
 
+Requires Node 20.19 or newer. From an existing app with a `src/` directory:
+
 ```sh
 npm install tanstack-db-notion-adapter @tanstack/react-db
 npx tanstack-db-notion init
 ```
 
-`init` asks for your PAT and a Notion database link or ID. It stores prompted
-server credentials in `.env.local` and creates:
+`init` asks for your PAT and a Notion database link or ID. It stores the server
+configuration in `.env.local` and creates:
 
 - `notion.schema.json` — the checked-in schema contract
 - `src/notion.generated.ts` — the generated TypeScript schema and types
+
+For a coding agent or other non-interactive environment, create the env file
+first and pass the database directly:
+
+```dotenv
+# .env.local — server only
+NOTION_PAT=MY_PAT
+```
+
+```sh
+npx tanstack-db-notion init --id "NOTION_DATABASE_URL"
+```
+
+Use `--out` if your project does not use a `src/` directory.
 
 Review and apply the one-time schema setup:
 
@@ -64,8 +80,8 @@ import { notionDataSourceSchema } from '@/notion.generated'
 
 const sync = createNotionSyncHandler({
   token: process.env.NOTION_PAT!,
-  dataSourceId: process.env.NOTION_DATA_SOURCE_ID!,
   schema: notionDataSourceSchema,
+  pageContent: true,
   idempotencyStore: createMemoryNotionIdempotencyStore(),
   dangerouslyAllowUnauthenticated: true,
 })
@@ -96,6 +112,9 @@ export const entries = createCollection(
 )
 ```
 
+Next.js users should mount the collection below a client-only boundary; see
+[framework integration](docs/frameworks.md#nextjs-app-router-and-ssr).
+
 Query it like any TanStack DB collection:
 
 ```tsx
@@ -116,14 +135,18 @@ Mutations are optimistic and persist offline immediately:
 
 ```ts
 // src/actions.ts — client
-entries.insert({ title: 'Today' })
+import { entries } from './data/journal'
 
+entries.insert({ title: 'Today' })
 entries.update(entry.id, (draft) => {
   draft.title = 'A better title'
 })
-
 entries.delete(entry.id)
 ```
+
+The generated file also exports `NotionDataSourceSchemaInput` for inserts and
+update helpers, and `NotionDataSourceSchemaRow` for fetched records. The input
+type omits read-only Notion metadata.
 
 ## Page contents
 
@@ -142,16 +165,52 @@ export const entryContent = createNotionPageContentClient({
 })
 ```
 
-The React hook watches only the open page. It revalidates that page on window
-focus and every 60 seconds, so edits made directly in Notion appear without
-refetching every page body.
+Attach an existing row before rendering its body. The hook subscribes to local
+state; `attachPage` performs the initial fetch:
 
 ```tsx
 // src/Editor.tsx — client
 import { useNotionPageContent } from 'tanstack-db-notion-adapter/react'
+import { useEffect } from 'react'
+import { entryContent } from './data/journal-content'
+import type { NotionDataSourceSchemaRow } from './notion.generated'
 
-const content = useNotionPageContent(entryContent, selectedEntryId)
+export function Editor({ entry }: { entry: NotionDataSourceSchemaRow }) {
+  const content = useNotionPageContent(entryContent, entry.id)
+
+  useEffect(() => {
+    if (entry.notionPageId) {
+      void entryContent.attachPage(entry.id, entry.notionPageId)
+    }
+  }, [entry.id, entry.notionPageId])
+
+  return (
+    <textarea
+      value={content?.markdown ?? ''}
+      disabled={!content}
+      onChange={(event) => {
+        void entryContent.update(entry.id, event.target.value)
+      }}
+    />
+  )
+}
 ```
+
+Create a durable body before inserting a new row so both can flush after an
+offline session:
+
+```ts
+// src/actions.ts — client
+import { entries } from './data/journal'
+import { entryContent } from './data/journal-content'
+
+const id = crypto.randomUUID()
+await entryContent.createDraft(id, '# Today')
+entries.insert({ id, title: 'Today' })
+```
+
+The hook watches only the open page. It revalidates that page on window focus
+and every 60 seconds without refetching every page body.
 
 See [page-content sync](docs/page-content.md) for creating drafts, debounced
 writes, direct Notion edits, webhooks, and conflict handling.
@@ -165,7 +224,7 @@ The CLI automatically loads `.env.local`, `.env`, `notion.schema.json`, and
 npx tanstack-db-notion push --dry-run  # preview local changes
 npx tanstack-db-notion push            # apply local changes to Notion
 npx tanstack-db-notion pull            # accept changes made in Notion
-npx tanstack-db-notion check           # detect drift in CI
+npx tanstack-db-notion check           # detect all remote drift in CI
 ```
 
 Advanced paths and destructive changes are covered in the
@@ -180,9 +239,8 @@ Advanced paths and destructive changes are covered in the
 - [`examples/reliability`](examples/reliability) — executable failure and
   recovery scenarios
 
-For Next.js SSR, authenticated startup, offline app-shell caching, and other
-framework details, see [framework integration](docs/frameworks.md). The server
-and CLI require Node 20.19 or newer.
+For authenticated startup, offline app-shell caching, and other framework
+details, see [framework integration](docs/frameworks.md).
 
 ## License
 

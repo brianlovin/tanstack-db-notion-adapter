@@ -115,6 +115,25 @@ function createFakeNotion() {
 }
 
 describe('createNotionSyncHandler', () => {
+  it('uses the data source ID embedded in a generated schema', async () => {
+    const notionApi = createFakeNotion()
+    const schema = notionSchema(testSchema.fields, { dataSourceId: 'source-1' })
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      schema,
+      fetch: notionApi.fetch as typeof globalThis.fetch,
+      authorize: () => true,
+      dangerouslyAllowEphemeralIdempotency: true,
+    })
+
+    const response = await handler(new Request('http://app.test/api/todos'))
+
+    expect(response.status).toBe(200)
+    expect(notionApi.calls.some(({ url }) => url.pathname.includes('source-1'))).toBe(
+      true,
+    )
+  })
+
   it('verifies webhook signatures and deduplicates matching invalidations', async () => {
     const invalidationStore = createMemoryNotionInvalidationStore()
     let deliveredVerificationToken: string | null = null

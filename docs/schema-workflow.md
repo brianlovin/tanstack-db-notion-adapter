@@ -20,6 +20,29 @@ The CLI validates the manifest before generation or any network request. It
 rejects malformed fields, invalid TypeScript identifiers, generated export
 name collisions, duplicate Notion names, and duplicate stable property IDs.
 
+Add properties with Notion API type names. Leave out `propertyId`; `push` fills
+it after Notion creates the property:
+
+```json
+{
+  "properties": [
+    { "key": "entryDate", "name": "Date", "type": "date" },
+    {
+      "key": "mood",
+      "name": "Mood",
+      "type": "select",
+      "options": [
+        { "name": "Great", "color": "green" },
+        { "name": "Rough", "color": "red" }
+      ]
+    }
+  ]
+}
+```
+
+`config` is optional for these managed types. More complex properties preserve
+their Notion configuration when pulled.
+
 ## Connect an existing source
 
 Run the interactive setup from the project root:
@@ -30,8 +53,13 @@ npx tanstack-db-notion init
 
 The CLI automatically loads `.env.local` and `.env`. When credentials are
 missing, `init` asks for a PAT and exact data-source ID, single-source database
-ID, or pasted Notion database URL. Prompted credentials are stored in the
-gitignored `.env.local`; the concrete source ID is also written to the manifest.
+ID, or pasted Notion database URL. A prompted PAT and the resolved source ID are
+stored in the gitignored `.env.local`; the source ID is also written to the
+manifest and generated schema.
+
+For a non-interactive coding agent or CI job, put `NOTION_PAT` in `.env.local`
+and run `npx tanstack-db-notion init --id "<database URL or ID>"`. The resolved
+source ID is saved even though it was supplied with a flag.
 
 The default outputs are `notion.schema.json` and `src/notion.generated.ts`.
 `--env`, `--manifest`, `--out`, `--id`, and `--name` remain available for
@@ -44,15 +72,14 @@ includes them. Review raw or unsupported fields in the
 
 A database ID or URL is accepted only when it resolves to one source. If a
 database has several sources, the CLI lists their names and IDs and stops
-instead of guessing. `resolveNotionDataSourceId()` provides the same behavior
-for server setup.
+instead of guessing. Generated schemas retain the resolved ID; use
+`resolveNotionDataSourceId()` when configuring a hand-written schema.
 
 ## Evolve a code-first source
 
 Edit the manifest and follow one repeatable loop:
 
 ```sh
-npx tanstack-db-notion generate
 npx tanstack-db-notion push --dry-run
 npx tanstack-db-notion push
 npx tanstack-db-notion check
@@ -62,6 +89,9 @@ npx tanstack-db-notion check
 then pulls stable property IDs and regenerates types. Type changes or option
 removals require `--accept-data-loss`; ask the data owner before using it. The
 deprecated `--allow-destructive` alias emits a warning.
+
+Use `generate` when you only need to refresh TypeScript without contacting
+Notion. A successful `push` already regenerates it.
 
 The adapter needs a stable rich-text sync key. For a new or existing source,
 the default manifest calls it `Client ID`. A dry run warns when push will add
@@ -81,7 +111,9 @@ npx tanstack-db-notion check
 ```
 
 Review the manifest diff. Stable IDs distinguish a rename from a delete plus
-addition. `check` exits non-zero on drift and is suitable for CI.
+addition. `check` is strict: it also reports properties that exist only in
+Notion, exits non-zero on drift, and is suitable for CI. `push` never deletes
+those Notion-only properties; use `pull` to add them to the manifest.
 
 ## CI contract
 

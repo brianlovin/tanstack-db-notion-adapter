@@ -11,6 +11,7 @@ const option = (name, fallback) => {
 const json = args.includes('--json')
 const manifestPath = resolve(option('--manifest', 'notion.schema.json'))
 const findings = []
+let manifestHasDataSource = false
 
 const add = (level, check, message) => findings.push({ level, check, message })
 
@@ -66,6 +67,7 @@ if (!manifestText) {
         ? 'Manifest contains a non-secret data source ID.'
         : 'Manifest has no dataSourceId yet; pull or push will populate it.',
     )
+    manifestHasDataSource = Boolean(manifest.dataSourceId)
   } catch {
     add('error', 'manifest', 'Manifest is not valid JSON.')
   }
@@ -90,7 +92,9 @@ if (!envText) {
   )
   const hasToken = keys.has('NOTION_PAT') || keys.has('NOTION_TOKEN')
   const hasSource =
-    keys.has('NOTION_DATA_SOURCE_ID') || keys.has('NOTION_DATABASE_ID')
+    manifestHasDataSource ||
+    keys.has('NOTION_DATA_SOURCE_ID') ||
+    keys.has('NOTION_DATABASE_ID')
   add(
     hasToken ? 'ok' : 'error',
     'environment',
@@ -99,7 +103,9 @@ if (!envText) {
   add(
     hasSource ? 'ok' : 'error',
     'environment',
-    hasSource ? 'A Notion source/database key is present (value not read).' : 'No source/database ID key is present.',
+    hasSource
+      ? 'A Notion source is configured (values not read).'
+      : 'No source ID is present in the manifest or environment.',
   )
 }
 

@@ -10,7 +10,7 @@ import {
   defaultGeneratedPath,
   ignoreDefaultEnvFile,
   loadCliEnvironment,
-  updateEnvFile,
+  saveInitEnvironment,
 } from './cli-config.js'
 import {
   assertNotionSchemaManifest,
@@ -71,7 +71,7 @@ Options:
 
 Environment:
   NOTION_PAT (preferred) or NOTION_TOKEN
-  NOTION_DATA_SOURCE_ID or NOTION_DATABASE_ID
+  NOTION_DATA_SOURCE_ID or NOTION_DATABASE_ID (optional after init)
 `
 
 function parseArgs(argv: Array<string>): CliOptions {
@@ -214,7 +214,6 @@ interface CliCredentials {
   token: string
   id: string
   promptedToken: boolean
-  promptedId: boolean
 }
 
 async function resolveCredentials(
@@ -228,7 +227,6 @@ async function resolveCredentials(
     process.env.NOTION_DATABASE_ID ??
     manifest?.dataSourceId
   let promptedToken = false
-  let promptedId = false
 
   if (
     (!token || !id) &&
@@ -250,7 +248,6 @@ async function resolveCredentials(
       }
       if (!id) {
         id = (await prompt.question('Notion database URL or ID: ')).trim()
-        promptedId = true
       }
     } finally {
       prompt.close()
@@ -258,29 +255,30 @@ async function resolveCredentials(
   }
 
   if (!token) {
-    throw new Error('Set NOTION_PAT (or NOTION_TOKEN) before calling Notion.')
+    throw new Error(
+      'Set NOTION_PAT in .env.local (or the environment). For non-interactive setup, also pass --id "<Notion database URL or ID>".',
+    )
   }
   if (!id) {
     throw new Error(
-      'Set NOTION_DATA_SOURCE_ID or NOTION_DATABASE_ID, or run init in an interactive terminal.',
+      'Pass --id "<Notion database URL or ID>", set NOTION_DATA_SOURCE_ID, or run init in an interactive terminal.',
     )
   }
-  return { token, id, promptedToken, promptedId }
+  return { token, id, promptedToken }
 }
 
-async function savePromptedCredentials(
+async function saveInitConfiguration(
   options: CliOptions,
   auth: CliCredentials,
   dataSourceId: string,
 ): Promise<void> {
-  if (!auth.promptedToken && !auth.promptedId) return
   const path = options.envFile ?? resolve('.env.local')
-  await updateEnvFile(path, {
-    ...(auth.promptedToken ? { NOTION_PAT: auth.token } : {}),
-    NOTION_DATA_SOURCE_ID: dataSourceId,
+  await saveInitEnvironment(path, {
+    dataSourceId,
+    ...(auth.promptedToken ? { promptedToken: auth.token } : {}),
   })
   if (!options.envFile) await ignoreDefaultEnvFile(path)
-  console.log(`Saved server credentials to ${path}`)
+  console.log(`Saved server configuration to ${path}`)
 }
 
 async function main(): Promise<void> {
@@ -321,7 +319,7 @@ async function main(): Promise<void> {
   const snapshot = await inspectNotionDataSource(auth)
 
   if (options.command === 'init') {
-    await savePromptedCredentials(options, auth, snapshot.dataSourceId)
+    await saveInitConfiguration(options, auth, snapshot.dataSourceId)
   }
 
   if (options.command === 'doctor') {
@@ -330,7 +328,9 @@ async function main(): Promise<void> {
     console.log(`Notion: ${notionSourceUrl(snapshot.dataSourceId)}`)
     console.log(`Properties: ${snapshot.properties.length}`)
     if (existing) {
-      const operations = diffNotionSchema(existing, snapshot)
+      const operations = diffNotionSchema(existing, snapshot, {
+        includeRemoteAdditions: true,
+      })
       console.log(formatNotionSchemaDrift(operations))
       if (operations.length) process.exitCode = 1
     } else {
@@ -364,7 +364,9 @@ async function main(): Promise<void> {
       `Missing ${options.manifestPath}. Run the init command first.`,
     )
   }
-  const operations = diffNotionSchema(existing, snapshot)
+  const operations = diffNotionSchema(existing, snapshot, {
+    includeRemoteAdditions: options.command === 'check',
+  })
   if (options.command === 'check') {
     console.log(formatNotionSchemaDrift(operations))
     console.log(`Notion: ${notionSourceUrl(snapshot.dataSourceId)}`)

@@ -6,6 +6,7 @@ import {
   defaultGeneratedPath,
   ignoreDefaultEnvFile,
   loadCliEnvironment,
+  saveInitEnvironment,
   updateEnvFile,
 } from '../src/cli-config.js'
 
@@ -62,6 +63,22 @@ describe('CLI conventions', () => {
       )
       expect(await readFile(join(directory, '.gitignore'), 'utf8')).toBe(
         '.env.local\n',
+      )
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('persists a resolved --id without rewriting an existing PAT', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'notion-cli-init-'))
+    const envPath = join(directory, '.env.local')
+    try {
+      await writeFile(envPath, 'NOTION_PAT=existing\n')
+
+      await saveInitEnvironment(envPath, { dataSourceId: 'resolved-source' })
+
+      expect(await readFile(envPath, 'utf8')).toBe(
+        'NOTION_PAT=existing\nNOTION_DATA_SOURCE_ID="resolved-source"\n',
       )
     } finally {
       await rm(directory, { recursive: true, force: true })

@@ -8,6 +8,18 @@ import {
 import { notionPage, testSchema, testTodo } from './fixtures.js'
 
 describe('notionSchema', () => {
+  it('retains a generated data source ID for server configuration', () => {
+    const schema = notionSchema(
+      {
+        id: notion.id('Client ID'),
+        title: notion.title('Name'),
+      },
+      { dataSourceId: 'source-1' },
+    )
+
+    expect(schema.dataSourceId).toBe('source-1')
+  })
+
   it('omits read-only fields from inferred insert input types', () => {
     const schema = notionSchema({
       id: notion.id('Client ID'),

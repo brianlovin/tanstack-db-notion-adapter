@@ -74,7 +74,8 @@ export type NotionFilter<TFields extends NotionFields> =
 
 interface NotionSyncHandlerBaseConfig<TFields extends NotionFields> {
   token: string
-  dataSourceId: string
+  /** Defaults to the source ID embedded in a generated schema. */
+  dataSourceId?: string
   schema: NotionSchema<TFields>
   notionVersion?: string
   /** Override for tests, edge runtimes, or a custom Notion proxy. */
@@ -885,7 +886,12 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
   type TItem = InferNotionOutput<TFields>
 
   if (!config.token) throw new Error('A Notion token is required.')
-  if (!config.dataSourceId) throw new Error('A Notion data source ID is required.')
+  const dataSourceId = config.dataSourceId ?? config.schema.dataSourceId
+  if (!dataSourceId) {
+    throw new Error(
+      'A Notion data source ID is required. Regenerate the schema or pass dataSourceId explicitly.',
+    )
+  }
   if (!config.authorize && config.dangerouslyAllowUnauthenticated !== true) {
     throw new Error(
       'An authorize callback is required. For a local-only prototype, set dangerouslyAllowUnauthenticated: true explicitly.',
@@ -934,8 +940,8 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
       'rateLimitScope is required when a shared rateLimiter is configured.',
     )
   }
-  const rateLimitScope = config.rateLimitScope ?? config.dataSourceId
-  const invalidationScope = config.invalidationScope ?? config.dataSourceId
+  const rateLimitScope = config.rateLimitScope ?? dataSourceId
+  const invalidationScope = config.invalidationScope ?? dataSourceId
   let schemaValidation:
     | { checkedAt: number; result: NotionSchemaResult }
     | null = null
@@ -1218,7 +1224,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     signal?: AbortSignal,
   ): Promise<NotionSchemaResult> => {
     const dataSource = await requestNotion<NotionDataSourceResponse>(
-      `/v1/data_sources/${encodeURIComponent(config.dataSourceId)}`,
+      `/v1/data_sources/${encodeURIComponent(dataSourceId)}`,
       signal ? { signal } : {},
     )
     const properties = dataSource.properties ?? {}
@@ -1244,7 +1250,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
 
     return {
       ok: mismatches.length === 0,
-      dataSourceId: config.dataSourceId,
+      dataSourceId,
       mismatches,
     }
   }
@@ -1287,7 +1293,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
       )
     }
     const query = params.toString()
-    return `/v1/data_sources/${encodeURIComponent(config.dataSourceId)}/query${query ? `?${query}` : ''}`
+    return `/v1/data_sources/${encodeURIComponent(dataSourceId)}/query${query ? `?${query}` : ''}`
   }
 
   const queryPages = async (
@@ -1542,7 +1548,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
           body: JSON.stringify({
             parent: {
               type: 'data_source_id',
-              data_source_id: config.dataSourceId,
+              data_source_id: dataSourceId,
             },
             properties: config.schema.serialize(mutation.value),
           }),
@@ -1718,7 +1724,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
         normalized.type === 'insert' && idempotencyStore
           ? await idempotencyStore.execute(
               {
-                scope: `notion:${config.dataSourceId}:insert-key`,
+                scope: `notion:${dataSourceId}:insert-key`,
                 key: normalized.key,
                 fingerprint: await fingerprint(
                   config.schema.serialize(normalized.value),
@@ -1730,7 +1736,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
       const result = idempotencyStore
         ? await idempotencyStore.execute(
             {
-              scope: `notion:${config.dataSourceId}:mutation`,
+              scope: `notion:${dataSourceId}:mutation`,
               key: `${batch.idempotencyKey}:${mutationIndex}`,
               fingerprint: await fingerprint(normalized),
             },
@@ -1758,7 +1764,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     if (
       page.id !== pageId ||
       parent?.type !== 'data_source_id' ||
-      parent.data_source_id !== config.dataSourceId
+      parent.data_source_id !== dataSourceId
     ) {
       throw new NotionHttpError({
         status: 404,
@@ -1983,7 +1989,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
         try {
           const result = await idempotencyStore.execute(
               {
-                scope: `notion:${config.dataSourceId}:mutations`,
+                scope: `notion:${dataSourceId}:mutations`,
                 key: body.idempotencyKey,
                 fingerprint: await fingerprint(body.mutations),
               },

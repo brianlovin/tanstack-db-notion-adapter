@@ -22,7 +22,7 @@ Notes on 5174/8788.
 - `src/content-client.ts`: lazy durable enhanced-Markdown page bodies.
 - `examples/`: acceptance examples, not package internals.
 
-Edit `notion.schema.json`, then regenerate `*-schema.generated.ts`. Do not
+Edit `notion.schema.json`, then regenerate `src/notion.generated.ts`. Do not
 hand-edit generated files. Preserve unrelated working-tree changes.
 
 ## Non-negotiable behavior

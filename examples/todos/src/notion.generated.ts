@@ -11,7 +11,7 @@ export const todoSchema = notionSchema({
   updatedAt: notion.lastEditedTime(),
   notionPageId: notion.pageId(),
   notionUrl: notion.pageUrl(),
-})
+}, { dataSourceId: "3b1c711c-0ceb-80a2-8c62-000bae4f0170" })
 
 export type TodoSchemaInput = InferNotionInput<
   typeof todoSchema.fields
