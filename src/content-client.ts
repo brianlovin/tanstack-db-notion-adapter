@@ -1,14 +1,15 @@
-import type {
-  NotionErrorBody,
-  NotionInvalidationVersion,
-  NotionPageContent,
-} from './protocol.js'
+import {
+  createBrowserSyncLifecycle,
+  createJsonRequester,
+  createSerializedQueue,
+  NotionSyncError,
+} from './browser-sync-runtime.js'
 import {
   createBrowserNotionStorage,
-  NotionSyncError,
   type NotionCollectionStorage,
   type NotionPersistedState,
 } from './client.js'
+import type { NotionInvalidationVersion, NotionPageContent } from './protocol.js'
 
 export type NotionPageContentStatus =
   | 'idle'
@@ -159,21 +160,36 @@ export function createNotionPageContentClient<
   const watchedKeys = new Map<string, number>()
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
   const flushQueues = new Map<string, Promise<void>>()
-  let attachmentQueue = Promise.resolve()
-  let refreshQueue = Promise.resolve()
+  const attachmentQueue = createSerializedQueue()
+  const refreshQueue = createSerializedQueue()
+  const operationQueue = createSerializedQueue()
   let collectionSubscription: { unsubscribe: () => void } | undefined
-  let pollInterval: ReturnType<typeof setInterval> | undefined
-  let invalidationInterval: ReturnType<typeof setInterval> | undefined
   let invalidationVersion: number | null = null
-  const online = () =>
-    config.isOnline?.() ??
-    (typeof navigator === 'undefined' || navigator.onLine !== false)
   let records = new Map<string, NotionPageContentSnapshot>()
-  let operationQueue = Promise.resolve()
   let disposed = false
   let syncEnabled = config.autoStart !== false
   let storageRevision = 0
-  const lifecycle = new AbortController()
+  const lifecycle = createBrowserSyncLifecycle({
+    ...(config.isOnline ? { isOnline: config.isOnline } : {}),
+    ...(config.refreshOnWindowFocus === undefined
+      ? {}
+      : { refreshOnWindowFocus: config.refreshOnWindowFocus }),
+    focusMode: 'window',
+    pollIntervalMs,
+    invalidationPollIntervalMs,
+    onOnline: () => handleOnline(),
+    onFocus: () => handleFocus(),
+    onInvalidationPoll: () => {
+      void checkForRemoteChanges().catch(() => undefined)
+    },
+  })
+  const online = lifecycle.online
+  const requestJson = createJsonRequester({
+    fetch: fetcher,
+    lifecycleSignal: lifecycle.signal,
+    timeoutMs: requestTimeoutMs,
+    timeoutMessage: 'The page-content request timed out.',
+  })
 
   const notify = () => {
     for (const listener of listeners) {
@@ -185,14 +201,7 @@ export function createNotionPageContentClient<
     }
   }
 
-  const exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
-    const result = operationQueue.then(operation, operation)
-    operationQueue = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
-  }
+  const exclusive = operationQueue.run
 
   const persist = async (next: Map<string, NotionPageContentSnapshot>) => {
     const lastSyncedAt = [...next.values()].reduce<number | null>(
@@ -270,51 +279,7 @@ export function createNotionPageContentClient<
         await client.attachPage(key, notionPageId)
       }
     }
-    const result = attachmentQueue.then(run, run)
-    attachmentQueue = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
-  }
-
-  const requestJson = async <T>(url: string, init?: RequestInit): Promise<T> => {
-    const controller = new AbortController()
-    let timedOut = false
-    const abort = () => controller.abort(lifecycle.signal.reason)
-    if (lifecycle.signal.aborted) abort()
-    else lifecycle.signal.addEventListener('abort', abort, { once: true })
-    const timeout = setTimeout(() => {
-      timedOut = true
-      controller.abort()
-    }, requestTimeoutMs)
-    let response: Response
-    try {
-      response = await fetcher(url, { ...init, signal: controller.signal })
-    } catch (error) {
-      let message = 'The network request failed.'
-      if (timedOut) message = 'The page-content request timed out.'
-      else if (error instanceof Error) message = error.message
-      throw new NotionSyncError({
-        code: timedOut ? 'request_timeout' : 'network_error',
-        message,
-      })
-    } finally {
-      clearTimeout(timeout)
-      lifecycle.signal.removeEventListener('abort', abort)
-    }
-
-    const body = (await response.json().catch(() => ({}))) as T | NotionErrorBody
-    if (!response.ok) {
-      const error = (body as NotionErrorBody).error
-      throw new NotionSyncError({
-        status: response.status,
-        code: error?.code ?? `http_${response.status}`,
-        message: error?.message ?? `The sync server returned HTTP ${response.status}.`,
-        retryable: error?.retryable ?? response.status >= 500,
-      })
-    }
-    return body as T
+    return attachmentQueue.run(run)
   }
 
   const fetchRemote = async (
@@ -344,12 +309,7 @@ export function createNotionPageContentClient<
         await client.refresh(key).catch(() => undefined)
       }
     }
-    const result = refreshQueue.then(run, run)
-    refreshQueue = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
+    return refreshQueue.run(run)
   }
 
   const checkForRemoteChanges = async (): Promise<void> => {
@@ -576,21 +536,6 @@ export function createNotionPageContentClient<
 
   const handleFocus = () => {
     void refreshWatched().catch(() => undefined)
-  }
-
-  if (typeof window !== 'undefined') {
-    window.addEventListener('online', handleOnline)
-    if (config.refreshOnWindowFocus !== false) {
-      window.addEventListener('focus', handleFocus)
-    }
-    if (pollIntervalMs > 0) {
-      pollInterval = setInterval(handleFocus, pollIntervalMs)
-    }
-    if (invalidationPollIntervalMs > 0) {
-      invalidationInterval = setInterval(() => {
-        void checkForRemoteChanges().catch(() => undefined)
-      }, invalidationPollIntervalMs)
-    }
   }
 
   const client: NotionPageContentClient = {
@@ -834,23 +779,16 @@ export function createNotionPageContentClient<
     },
     cleanup() {
       disposed = true
-      lifecycle.abort(new Error('The page-content client was disposed.'))
+      lifecycle.dispose(new Error('The page-content client was disposed.'))
       for (const timer of timers.values()) clearTimeout(timer)
       timers.clear()
-      if (pollInterval) clearInterval(pollInterval)
-      if (invalidationInterval) clearInterval(invalidationInterval)
       watchedKeys.clear()
       listeners.clear()
-      if (typeof window !== 'undefined') {
-        window.removeEventListener('online', handleOnline)
-        if (config.refreshOnWindowFocus !== false) {
-          window.removeEventListener('focus', handleFocus)
-        }
-      }
       collectionSubscription?.unsubscribe()
     },
   }
 
+  lifecycle.start()
   collectionSubscription = config.collection?.subscribeChanges(() => {
     void attachAvailablePages().catch(() => undefined)
   })

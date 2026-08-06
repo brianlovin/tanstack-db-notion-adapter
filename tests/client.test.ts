@@ -1,5 +1,5 @@
 import { createCollection } from '@tanstack/db'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   createMemoryNotionStorage,
   notionCollectionOptions,
@@ -10,7 +10,49 @@ import {
 } from '../src/index.js'
 import { testSchema, testTodo } from './fixtures.js'
 
+afterEach(() => {
+  vi.unstubAllGlobals()
+})
+
 describe('notionCollectionOptions', () => {
+  it('reconciles when a background document becomes visible', async () => {
+    const browserWindow = new EventTarget()
+    const browserDocument = Object.assign(new EventTarget(), {
+      visibilityState: 'visible',
+    })
+    vi.stubGlobal('window', browserWindow)
+    vi.stubGlobal('document', browserDocument)
+
+    let remote = testTodo({ id: 'visible-1', title: 'Before focus' })
+    const fetch = vi.fn(async () =>
+      Response.json({ rows: [remote], hasMore: false, nextCursor: null }),
+    )
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'visible-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage: createMemoryNotionStorage(),
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        autoStart: false,
+        pollIntervalMs: 0,
+        readOnly: true,
+      }),
+    )
+
+    await collection.preload()
+    await collection.utils.resumeSync()
+    remote = testTodo({ id: 'visible-1', title: 'After focus' })
+    browserDocument.dispatchEvent(new Event('visibilitychange'))
+
+    await vi.waitFor(() => {
+      expect(collection.get('visible-1')?.title).toBe('After focus')
+    })
+    expect(fetch).toHaveBeenCalledTimes(2)
+    await collection.cleanup()
+  })
+
   it('omits mutation handlers for read-only collections', () => {
     const options = notionCollectionOptions({
       id: 'read-only',

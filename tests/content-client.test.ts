@@ -24,6 +24,36 @@ afterEach(() => {
 })
 
 describe('createNotionPageContentClient', () => {
+  it('aborts page-content requests at the configured timeout', async () => {
+    vi.useFakeTimers()
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener('abort', () => {
+            reject(new Error('aborted'))
+          })
+        }),
+    )
+    const client = createNotionPageContentClient({
+      id: 'timeout-content',
+      endpoint: 'http://app.test/api/notes',
+      storage: createMemoryNotionStorage(),
+      fetch: fetch as typeof globalThis.fetch,
+      requestTimeoutMs: 10,
+      pollIntervalMs: 0,
+    })
+
+    const loading = client.load('note-1', 'page-1')
+    const expectation = expect(loading).rejects.toMatchObject({
+      code: 'request_timeout',
+      message: 'The page-content request timed out.',
+    })
+    await vi.advanceTimersByTimeAsync(10)
+
+    await expectation
+    client.cleanup()
+  })
+
   it('persists every draft immediately and debounces remote writes', async () => {
     vi.useFakeTimers()
     const storage = createMemoryNotionStorage()

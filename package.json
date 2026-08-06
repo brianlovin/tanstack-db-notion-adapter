@@ -2,6 +2,14 @@
   "name": "tanstack-db-notion-adapter",
   "version": "0.2.0",
   "description": "Offline-first, end-to-end typed TanStack DB collections backed by Notion data sources",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brianlovin/tanstack-db-notion-adapter.git"
+  },
+  "homepage": "https://github.com/brianlovin/tanstack-db-notion-adapter#readme",
+  "bugs": {
+    "url": "https://github.com/brianlovin/tanstack-db-notion-adapter/issues"
+  },
   "type": "module",
   "license": "MIT",
   "sideEffects": false,
@@ -49,10 +57,6 @@
     "./server": {
       "types": "./dist/server.d.ts",
       "import": "./dist/server.js"
-    },
-    "./schema-tools": {
-      "types": "./dist/schema-tools.d.ts",
-      "import": "./dist/schema-tools.js"
     },
     "./react": {
       "types": "./dist/react.d.ts",

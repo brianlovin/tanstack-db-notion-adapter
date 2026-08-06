@@ -7,8 +7,13 @@ import type {
   UpdateMutationFnParams,
   UtilsRecord,
 } from '@tanstack/db'
+import {
+  createBrowserSyncLifecycle,
+  createJsonRequester,
+  createSerializedQueue,
+  NotionSyncError,
+} from './browser-sync-runtime.js'
 import type {
-  NotionErrorBody,
   NotionInvalidationVersion,
   NotionListResult,
   NotionMutation,
@@ -21,6 +26,7 @@ import type {
   NotionFields,
   NotionSchema,
 } from './schema.js'
+export { NotionSyncError } from './browser-sync-runtime.js'
 
 export interface NotionOutboxEntry<TItem extends object> {
   id: string
@@ -208,28 +214,6 @@ export interface NotionCollectionConfig<TFields extends NotionFields>
    * @default true
    */
   autoStart?: boolean
-}
-
-export class NotionSyncError extends Error {
-  readonly status: number | null
-  readonly code: string
-  readonly retryable: boolean
-  readonly conflicts: ReadonlyArray<NotionPropertyConflict>
-
-  constructor(options: {
-    message: string
-    code?: string
-    status?: number | null
-    retryable?: boolean
-    conflicts?: ReadonlyArray<NotionPropertyConflict>
-  }) {
-    super(options.message)
-    this.name = 'NotionSyncError'
-    this.code = options.code ?? 'sync_error'
-    this.status = options.status ?? null
-    this.retryable = options.retryable ?? true
-    this.conflicts = options.conflicts ?? []
-  }
 }
 
 export class NotionPersistedStateError extends Error {
@@ -1086,9 +1070,6 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   )
   const instanceId = randomInstanceId()
   const listeners = new Set<() => void>()
-  const online = () =>
-    config.isOnline?.() ??
-    (typeof navigator === 'undefined' || navigator.onLine !== false)
 
   let state = emptyState<TItem>()
   let rows = new Map<string, TItem>()
@@ -1097,12 +1078,24 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   let syncEnabled = config.autoStart !== false
   let initialized = false
   let initializeResolve!: () => void
-  let operationQueue = Promise.resolve()
-  let interval: ReturnType<typeof setInterval> | null = null
-  let invalidationInterval: ReturnType<typeof setInterval> | null = null
   let channel: BroadcastChannel | null = null
   let quarantine: NotionQuarantineRecord | null = null
-  const lifecycle = new AbortController()
+  const operationQueue = createSerializedQueue()
+  const lifecycle = createBrowserSyncLifecycle({
+    ...(config.isOnline ? { isOnline: config.isOnline } : {}),
+    ...(config.refreshOnWindowFocus === undefined
+      ? {}
+      : { refreshOnWindowFocus: config.refreshOnWindowFocus }),
+    focusMode: 'visible-document',
+    pollIntervalMs,
+    invalidationPollIntervalMs,
+    onOnline: () => handleOnline(),
+    onOffline: () => handleOffline(),
+    onFocus: () => handleOnline(),
+    onInvalidationPoll: () => handleInvalidationPoll(),
+  })
+  const online = lifecycle.online
+  const requestJson = createJsonRequester({ fetch: fetcher })
   const initialization = new Promise<void>((resolve) => {
     initializeResolve = resolve
   })
@@ -1137,14 +1130,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     }
   }
 
-  const exclusive = <T>(operation: () => Promise<T>): Promise<T> => {
-    const result = operationQueue.then(operation, operation)
-    operationQueue = result.then(
-      () => undefined,
-      () => undefined,
-    )
-    return result
-  }
+  const exclusive = operationQueue.run
 
   const crossTab = async <T>(
     operation: (signal: AbortSignal) => Promise<T>,
@@ -1293,7 +1279,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
 
   const commitState = async (
     nextState: NotionPersistedState<TItem>,
-    nextRows: Map<string, TItem>,
+    nextRows?: Map<string, TItem>,
   ) => {
     if (disposed) throw lifecycle.signal.reason
     const committed = { ...nextState, version: 2 as const, revision: state.revision + 1 }
@@ -1302,22 +1288,13 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       : await storage.save(config.id, committed).then(() => true)
     if (!saved) throw new NotionStorageConflictError()
     state = committed
-    applyRows(nextRows)
+    if (nextRows) applyRows(nextRows)
     broadcast()
     setSyncState({})
   }
 
-  const persistStateOnly = async (nextState: NotionPersistedState<TItem>) => {
-    if (disposed) throw lifecycle.signal.reason
-    const committed = { ...nextState, version: 2 as const, revision: state.revision + 1 }
-    const saved = storage.compareAndSet
-      ? await storage.compareAndSet(config.id, state.revision, committed)
-      : await storage.save(config.id, committed).then(() => true)
-    if (!saved) throw new NotionStorageConflictError()
-    state = committed
-    broadcast()
-    setSyncState({})
-  }
+  const persistStateOnly = (nextState: NotionPersistedState<TItem>) =>
+    commitState(nextState)
 
   const outboxError = (error: unknown): NotionOutboxError => ({
     code: error instanceof NotionSyncError ? error.code : 'sync_error',
@@ -1328,37 +1305,6 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     conflicts:
       error instanceof NotionSyncError ? [...error.conflicts] : [],
   })
-
-  const requestJson = async <T>(
-    url: string,
-    init?: RequestInit,
-  ): Promise<T> => {
-    let response: Response
-    try {
-      response = await fetcher(url, init)
-    } catch (error) {
-      if (init?.signal?.aborted && init.signal.reason) {
-        throw init.signal.reason
-      }
-      throw new NotionSyncError({
-        code: 'network_error',
-        message: error instanceof Error ? error.message : 'The network request failed.',
-      })
-    }
-
-    const body = (await response.json().catch(() => ({}))) as T | NotionErrorBody
-    if (!response.ok) {
-      const error = (body as NotionErrorBody).error
-      throw new NotionSyncError({
-        status: response.status,
-        code: error?.code ?? `http_${response.status}`,
-        message: error?.message ?? `The sync server returned HTTP ${response.status}.`,
-        retryable: error?.retryable ?? response.status >= 500,
-        ...(error?.conflicts ? { conflicts: error.conflicts } : {}),
-      })
-    }
-    return body as T
-  }
 
   const fetchPage = async (cursor: string | null, signal: AbortSignal) => {
     const url = new URL(endpoint, globalThis.location?.href ?? 'http://localhost')
@@ -1706,32 +1652,13 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     })
   }
   const handleOffline = () => setSyncState({ status: 'offline', error: null })
-  const handleVisibility = () => {
-    if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-      handleOnline()
-    }
-  }
-
   const sync: SyncConfig<TItem, string> = {
     rowUpdateMode: 'full',
     sync(params) {
       sink = params
       setSyncState({ status: 'hydrating', error: null })
 
-      if (typeof window !== 'undefined') {
-        window.addEventListener('online', handleOnline)
-        window.addEventListener('offline', handleOffline)
-        if (config.refreshOnWindowFocus !== false) {
-          document.addEventListener('visibilitychange', handleVisibility)
-        }
-        if (pollIntervalMs > 0) interval = setInterval(handleOnline, pollIntervalMs)
-        if (invalidationPollIntervalMs > 0) {
-          invalidationInterval = setInterval(
-            handleInvalidationPoll,
-            invalidationPollIntervalMs,
-          )
-        }
-      }
+      lifecycle.start()
       if (typeof BroadcastChannel !== 'undefined') {
         channel = new BroadcastChannel(`tanstack-db-notion:${config.id}`)
         channel.addEventListener('message', (event) => {
@@ -1770,21 +1697,12 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
 
       return () => {
         disposed = true
-        lifecycle.abort(new Error('The Notion collection was disposed.'))
+        lifecycle.dispose(new Error('The Notion collection was disposed.'))
         sink = null
         if (!initialized) initializeResolve()
-        if (interval) clearInterval(interval)
-        if (invalidationInterval) clearInterval(invalidationInterval)
         channel?.close()
         channel = null
         listeners.clear()
-        if (typeof window !== 'undefined') {
-          window.removeEventListener('online', handleOnline)
-          window.removeEventListener('offline', handleOffline)
-          if (config.refreshOnWindowFocus !== false) {
-            document.removeEventListener('visibilitychange', handleVisibility)
-          }
-        }
       }
     },
   }

@@ -67,13 +67,19 @@ try {
     join(temporaryRoot, 'consumer.mjs'),
     `import { notion, notionCollectionOptions } from 'tanstack-db-notion-adapter'
 import { createNotionSyncHandler } from 'tanstack-db-notion-adapter/server'
-import { generateNotionSchemaSource } from 'tanstack-db-notion-adapter/schema-tools'
 import { useNotionPageContent, useNotionSyncState } from 'tanstack-db-notion-adapter/react'
 
-for (const [name, value] of Object.entries({ notion, notionCollectionOptions, createNotionSyncHandler, generateNotionSchemaSource, useNotionPageContent, useNotionSyncState })) {
+for (const [name, value] of Object.entries({ notion, notionCollectionOptions, createNotionSyncHandler, useNotionPageContent, useNotionSyncState })) {
   if (typeof value !== (name === 'notion' ? 'object' : 'function')) {
     throw new Error(\`Missing public export: \${name}\`)
   }
+}
+
+try {
+  await import('tanstack-db-notion-adapter/schema-tools')
+  throw new Error('Schema tools are unexpectedly public.')
+} catch (error) {
+  if (error?.code !== 'ERR_PACKAGE_PATH_NOT_EXPORTED') throw error
 }
 `,
   )

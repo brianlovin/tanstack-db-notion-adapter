@@ -22,6 +22,18 @@ content page belongs to the configured data source.
 
 The CLI is a trusted local process. It reads the PAT and source ID from env,
 inspects schema metadata, and writes a non-secret manifest and generated types.
+Schema tooling is an internal CLI Module rather than a supported package export.
+
+## Internal module map
+
+- `client` and `content-client` keep their separate public responsibilities but
+  share private browser lifecycle, request, and serialized-operation machinery.
+- `server` is the public composition point. Private request and mutation Modules
+  own Notion transport policy and idempotent mutation execution respectively.
+- `notion-source` resolves database URLs and IDs without importing the sync
+  server, so schema tooling depends only on the Notion calls it needs.
+- `property-capabilities` is the canonical registry for generated schema
+  builders, option-bearing properties, and schema-push support.
 
 ## Collection state flow
 
