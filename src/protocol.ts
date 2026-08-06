@@ -41,6 +41,8 @@ export interface NotionListResult<TItem extends object> {
   rows: Array<TItem>
   hasMore: boolean
   nextCursor: string | null
+  /** Greatest Notion last_edited_time observed in this response page. */
+  watermark?: string
   /** Shared invalidation version observed around this Notion query. */
   version?: number
 }

@@ -167,9 +167,11 @@ lost response can silently lose an acknowledged edit or create a duplicate.
 - [x] Offer progressive materialization for large read-only sources, with an
   atomic persisted page/cursor checkpoint and loaded-window refresh. Filter
   pushdown and mutable partial snapshots remain future work.
-- [ ] Add a durable incremental refresh/tombstone protocol before claiming
-  frequently changing 10,000-row mutable collections as an optimized use case;
-  webhook invalidation currently triggers a complete filtered refresh.
+- [x] Persist an inclusive `last_edited_time` watermark for changed-row catch-up
+  and retain periodic complete snapshots for deletion and filter-membership
+  integrity.
+- [ ] Retain page-level webhook tombstones before claiming immediate deletion
+  convergence without complete snapshots.
 - [ ] Define an explicit partition cursor and merge contract before representing
   more than 10,000 matching Notion pages as one logical collection.
 - [x] Skip unchanged collection updates during refresh.

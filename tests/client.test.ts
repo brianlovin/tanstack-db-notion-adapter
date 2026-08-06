@@ -567,6 +567,146 @@ describe('notionCollectionOptions', () => {
     await collection.cleanup()
   })
 
+  it('merges incremental changes and reserves deletion cleanup for a full sync', async () => {
+    const storage = createMemoryNotionStorage()
+    const watermark = '2026-08-01T12:00:00.000Z'
+    const unchanged = testTodo({
+      id: 'unchanged',
+      title: 'Keep unchanged',
+      updatedAt: watermark,
+    })
+    const staleDeleted = testTodo({
+      id: 'deleted-remotely',
+      title: 'Await full reconciliation',
+      updatedAt: watermark,
+    })
+    await storage.save('incremental-todos', {
+      version: 2,
+      revision: 0,
+      rows: [unchanged, staleDeleted],
+      outbox: [],
+      lastSyncedAt: Date.now(),
+      lastFullReconciledAt: Date.now(),
+      remoteWatermark: watermark,
+      remoteVersion: 0,
+    })
+    const changed = testTodo({
+      id: 'changed',
+      title: 'Fetched incrementally',
+      updatedAt: '2026-08-02T12:00:00.000Z',
+    })
+    const listUrls: Array<URL> = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      if (url.searchParams.get('action') === 'version') {
+        return Response.json({ version: 1 })
+      }
+      listUrls.push(url)
+      return url.searchParams.has('editedAfter')
+        ? Response.json({
+            rows: [changed],
+            hasMore: false,
+            nextCursor: null,
+            watermark: changed.updatedAt,
+            version: 1,
+          })
+        : Response.json({
+            rows: [unchanged, changed],
+            hasMore: false,
+            nextCursor: null,
+            watermark: changed.updatedAt,
+            version: 1,
+          })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'incremental-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        autoStart: false,
+        pollIntervalMs: 0,
+        fullReconciliationIntervalMs: 60 * 60_000,
+      }),
+    )
+
+    await collection.preload()
+    expect(await collection.utils.checkForRemoteChanges()).toBe(true)
+
+    expect(listUrls).toHaveLength(1)
+    expect(listUrls[0]?.searchParams.get('editedAfter')).toBe(watermark)
+    expect(collection.get('unchanged')?.title).toBe('Keep unchanged')
+    expect(collection.get('changed')?.title).toBe('Fetched incrementally')
+    expect(collection.get('deleted-remotely')).toBeDefined()
+
+    await collection.utils.syncNow()
+
+    expect(listUrls).toHaveLength(2)
+    expect(listUrls[1]?.searchParams.has('editedAfter')).toBe(false)
+    expect(collection.get('deleted-remotely')).toBeUndefined()
+    expect(await storage.load('incremental-todos')).toMatchObject({
+      remoteWatermark: changed.updatedAt,
+      remoteVersion: 1,
+    })
+    await collection.cleanup()
+  })
+
+  it('uses a full snapshot when periodic reconciliation is due', async () => {
+    const storage = createMemoryNotionStorage()
+    const watermark = '2026-08-01T12:00:00.000Z'
+    await storage.save('due-full-todos', {
+      version: 2,
+      revision: 0,
+      rows: [testTodo({ id: 'stale' })],
+      outbox: [],
+      lastSyncedAt: 1,
+      lastFullReconciledAt: 1,
+      remoteWatermark: watermark,
+      remoteVersion: 0,
+    })
+    const listUrls: Array<URL> = []
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      if (url.searchParams.get('action') === 'version') {
+        return Response.json({ version: 1 })
+      }
+      listUrls.push(url)
+      return Response.json({
+        rows: [],
+        hasMore: false,
+        nextCursor: null,
+        version: 1,
+      })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'due-full-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        autoStart: false,
+        pollIntervalMs: 0,
+        fullReconciliationIntervalMs: 100,
+      }),
+    )
+
+    await collection.preload()
+    expect(await collection.utils.checkForRemoteChanges()).toBe(true)
+
+    expect(listUrls).toHaveLength(1)
+    expect(listUrls[0]?.searchParams.has('editedAfter')).toBe(false)
+    expect(collection.get('stale')).toBeUndefined()
+    await collection.cleanup()
+  })
+
   it('materializes every remote page before committing a read-only refresh', async () => {
     const storage = createMemoryNotionStorage()
     let isOnline = false

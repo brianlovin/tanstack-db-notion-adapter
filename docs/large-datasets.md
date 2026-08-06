@@ -15,10 +15,10 @@ from memory, so repeated interaction is instant and offline. This is the right
 default for task, notes, CRM, inventory, or field applications where users edit
 data and expect global local queries.
 
-Costs are initial Notion requests, browser memory, IndexedDB size, and repeated
-full refreshes. Render large lists with virtualization and stable keys; a
-historical acceptance run covered a 10,000-row local query/sort regression and
-a virtualized task list.
+Costs are the initial snapshot, browser memory, IndexedDB size, changed-row
+catch-up, and periodic integrity snapshots. Render large lists with
+virtualization and stable keys; a historical acceptance run covered a
+10,000-row local query/sort regression and a virtualized task list.
 
 ## Progressive read-only collections
 
@@ -85,14 +85,21 @@ snapshot would weaken deletion and conflict guarantees.
 - Notion returns at most 100 rows per query page.
 - Cold hydration of `N` rows requires at least `ceil(N / 100)` query requests,
   plus schema validation and any paginated property requests.
-- Collections poll every 60 seconds by default and reconcile when a background
-  tab becomes visible. For sources with thousands of rows, prefer webhook
-  invalidation, lengthen this interval, or set `pollIntervalMs: 0` when the
-  application owns another refresh trigger.
+- Collections poll every 60 seconds by default and catch up from the persisted
+  `last_edited_time` watermark when a background tab becomes visible. The
+  filter is inclusive, so rows sharing the watermark millisecond are repeated
+  and safely merged rather than skipped.
+- A complete snapshot runs at most hourly by default to reconcile deletions,
+  missed webhook events, and rows that stopped matching a fixed filter. Set
+  `fullReconciliationIntervalMs: 0` to run it only through `syncNow()`, or use a
+  longer interval when stale deletions are acceptable.
+- For sources with thousands of rows, prefer webhook invalidation, lengthen the
+  polling interval, or set `pollIntervalMs: 0` when the application owns another
+  refresh trigger.
 - `completeProperties` adds paginated property requests per row and field.
 - Share one `NotionRateLimiter` for handlers using the same connection.
-- Add webhook invalidation for low-latency refresh, but keep periodic polling as
-  recovery for missed events.
+- Add webhook invalidation for low-latency catch-up, but keep periodic full
+  reconciliation as recovery because webhook events can be delayed or missed.
 - Unchanged snapshots do not republish collection updates.
 - Page content is lazy and cached by page; never fetch every page body during
   collection hydration.

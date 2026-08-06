@@ -960,6 +960,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
   const list = async (
     cursor: string | null,
     pageSize: number,
+    editedAfter: string | null,
     signal?: AbortSignal,
   ): Promise<NotionListResult<TItem>> => {
     await ensureSchema(signal)
@@ -968,8 +969,25 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
       : null
     const body: Record<string, unknown> = { page_size: pageSize }
     if (cursor) body.start_cursor = cursor
-    if (fixedFilter) body.filter = structuredClone(fixedFilter)
-    if (fixedSorts.length) {
+    const editedFilter = editedAfter
+      ? {
+          timestamp: 'last_edited_time',
+          last_edited_time: { on_or_after: editedAfter },
+        }
+      : null
+    if (fixedFilter && editedFilter) {
+      body.filter = { and: [structuredClone(fixedFilter), editedFilter] }
+    } else if (fixedFilter) {
+      body.filter = structuredClone(fixedFilter)
+    } else if (editedFilter) {
+      body.filter = editedFilter
+    }
+    if (editedAfter) {
+      body.sorts = [
+        { timestamp: 'last_edited_time', direction: 'ascending' },
+        ...structuredClone(fixedSorts),
+      ]
+    } else if (fixedSorts.length) {
       body.sorts = structuredClone(fixedSorts)
     }
     const response = await queryPages(body, signal)
@@ -1001,6 +1019,15 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
       hasMore: response.has_more === true,
       nextCursor:
         typeof response.next_cursor === 'string' ? response.next_cursor : null,
+      ...(pages.length > 0
+        ? {
+            watermark: pages.reduce(
+              (latest, page) =>
+                page.last_edited_time > latest ? page.last_edited_time : latest,
+              pages[0]!.last_edited_time,
+            ),
+          }
+        : {}),
       ...(versionAfter !== null ? { version: versionAfter } : {}),
     }
   }
@@ -1186,11 +1213,20 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
 
       if (request.method === 'GET') {
         const cursor = url.searchParams.get('cursor')
+        const editedAfter = url.searchParams.get('editedAfter')
+        if (editedAfter && !Number.isFinite(Date.parse(editedAfter))) {
+          throw new NotionHttpError({
+            status: 400,
+            code: 'invalid_edited_after',
+            message: 'editedAfter must be an ISO 8601 timestamp.',
+            retryable: false,
+          })
+        }
         const requestedSize = Number(url.searchParams.get('pageSize') ?? 100)
         const pageSize = Number.isFinite(requestedSize)
           ? Math.min(100, Math.max(1, Math.floor(requestedSize)))
           : 100
-        return json(await list(cursor, pageSize, request.signal))
+        return json(await list(cursor, pageSize, editedAfter, request.signal))
       }
 
       if (request.method === 'POST') {

@@ -60,6 +60,10 @@ export interface NotionPersistedState<TItem extends object> {
   rows: Array<TItem>
   outbox: Array<NotionOutboxEntry<TItem>>
   lastSyncedAt: number | null
+  /** Greatest remote last_edited_time incorporated into the local replica. */
+  remoteWatermark?: string | undefined
+  /** Last time a complete snapshot reconciled deletions and filter membership. */
+  lastFullReconciledAt?: number | undefined
   remoteVersion?: number | undefined
   pagination?: NotionRemotePaginationState | undefined
 }
@@ -196,6 +200,12 @@ export interface NotionCollectionConfig<TFields extends NotionFields>
   pollIntervalMs?: number
   /** Poll only the webhook invalidation version. Set to 0 to disable. @default 0 */
   invalidationPollIntervalMs?: number
+  /**
+   * Maximum time between complete snapshots. Normal polls fetch only rows edited
+   * after the remote watermark. Set to 0 to reconcile fully only on syncNow().
+   * @default 3600000
+   */
+  fullReconciliationIntervalMs?: number
   /** Maximum mutations sent in one server request. Must be between 1 and 50. @default 50 */
   maxMutationsPerBatch?: number
   /** Override browser connectivity detection, primarily for non-browser runtimes. */
@@ -989,6 +999,24 @@ function migratePersistedState<TItem extends object>(
   }
   if (
     value.version === 2 &&
+    value.remoteWatermark !== undefined &&
+    (typeof value.remoteWatermark !== 'string' ||
+      !Number.isFinite(Date.parse(value.remoteWatermark)))
+  ) {
+    return invalidPersistedState('The persisted remote watermark is invalid.')
+  }
+  if (
+    value.version === 2 &&
+    value.lastFullReconciledAt !== undefined &&
+    (!Number.isFinite(value.lastFullReconciledAt) ||
+      value.lastFullReconciledAt < 0)
+  ) {
+    return invalidPersistedState(
+      'The persisted full reconciliation time is invalid.',
+    )
+  }
+  if (
+    value.version === 2 &&
     value.pagination !== undefined &&
     (!isRecord(value.pagination) ||
       value.pagination.mode !== 'progressive' ||
@@ -1011,6 +1039,14 @@ function migratePersistedState<TItem extends object>(
         normalizeOutboxEntry<TItem>(entry, value.version === 1),
       ),
       lastSyncedAt: value.lastSyncedAt,
+      remoteWatermark:
+        value.version === 2 && value.remoteWatermark !== undefined
+          ? value.remoteWatermark
+          : undefined,
+      lastFullReconciledAt:
+        value.version === 2 && value.lastFullReconciledAt !== undefined
+          ? value.lastFullReconciledAt
+          : value.lastSyncedAt ?? undefined,
       remoteVersion:
         value.version === 2 && value.remoteVersion !== undefined
           ? value.remoteVersion
@@ -1063,6 +1099,10 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   const invalidationPollIntervalMs = Math.max(
     0,
     config.invalidationPollIntervalMs ?? 0,
+  )
+  const fullReconciliationIntervalMs = Math.max(
+    0,
+    config.fullReconciliationIntervalMs ?? 60 * 60_000,
   )
   const maxMutationsPerBatch = Math.min(
     50,
@@ -1306,10 +1346,15 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       error instanceof NotionSyncError ? [...error.conflicts] : [],
   })
 
-  const fetchPage = async (cursor: string | null, signal: AbortSignal) => {
+  const fetchPage = async (
+    cursor: string | null,
+    signal: AbortSignal,
+    editedAfter?: string,
+  ) => {
     const url = new URL(endpoint, globalThis.location?.href ?? 'http://localhost')
     url.searchParams.set('pageSize', String(pageSize))
     if (cursor) url.searchParams.set('cursor', cursor)
+    if (editedAfter) url.searchParams.set('editedAfter', editedAfter)
     const result = await requestJson<NotionListResult<TItem>>(url.toString(), {
       signal,
     })
@@ -1392,19 +1437,36 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     return requiresRefresh
   }
 
-  const refresh = async (signal: AbortSignal) => {
-    const remote = new Map<string, TItem>()
+  const refresh = async (
+    signal: AbortSignal,
+    requestedMode: 'full' | 'auto' = 'full',
+  ) => {
+    const now = Date.now()
+    const fullReconciliationDue =
+      fullReconciliationIntervalMs > 0 &&
+      (state.lastFullReconciledAt === undefined ||
+        now - state.lastFullReconciledAt >= fullReconciliationIntervalMs)
+    const mode =
+      requestedMode === 'full' ||
+      config.syncMode === 'progressive' ||
+      !state.remoteWatermark ||
+      fullReconciliationDue
+        ? 'full'
+        : 'incremental'
+    const editedAfter = mode === 'incremental' ? state.remoteWatermark : undefined
+    const remote = mode === 'full' ? new Map<string, TItem>() : new Map(rows)
     const seenCursors = new Set<string>()
     let cursor: string | null = null
     let loadedPages = 0
     let remoteVersion: number | undefined
+    let remoteWatermark = mode === 'full' ? undefined : state.remoteWatermark
     const targetPages =
       config.syncMode === 'progressive'
         ? Math.max(1, state.pagination?.loadedPages ?? 1)
         : Number.POSITIVE_INFINITY
 
     do {
-      const result = await fetchPage(cursor, signal)
+      const result = await fetchPage(cursor, signal, editedAfter)
       if (result.version !== undefined) {
         if (
           remoteVersion !== undefined &&
@@ -1417,6 +1479,12 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           })
         }
         remoteVersion = result.version
+      }
+      if (
+        result.watermark &&
+        (!remoteWatermark || result.watermark > remoteWatermark)
+      ) {
+        remoteWatermark = result.watermark
       }
       for (const row of result.rows) remote.set(config.schema.getKey(row), row)
       loadedPages += 1
@@ -1438,7 +1506,12 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       {
         ...state,
         rows: [...remote.values()],
-        lastSyncedAt: Date.now(),
+        lastSyncedAt: now,
+        remoteWatermark,
+        lastFullReconciledAt:
+          mode === 'full' && config.syncMode !== 'progressive'
+            ? now
+            : state.lastFullReconciledAt,
         remoteVersion: remoteVersion ?? state.remoteVersion,
         pagination:
           config.syncMode === 'progressive'
@@ -1454,7 +1527,9 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     )
   }
 
-  const synchronize = (reconcile = true): Promise<void> =>
+  const synchronize = (
+    mode: 'auto' | 'full' | 'flush' = 'auto',
+  ): Promise<void> =>
     exclusive(async () => {
       await initialization
       if (disposed) return
@@ -1468,7 +1543,9 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
         await crossTab(async (signal) => {
           await reload()
           const requiresRefresh = await flush(signal)
-          if (reconcile || requiresRefresh) await refresh(signal)
+          if (mode !== 'flush' || requiresRefresh) {
+            await refresh(signal, mode === 'full' ? 'full' : 'auto')
+          }
         })
         setSyncState({ status: 'synced', error: null })
       } catch (error) {
@@ -1494,7 +1571,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       signal: lifecycle.signal,
     })
     if (state.remoteVersion === result.version) return false
-    await synchronize()
+    await synchronize('auto')
     return true
   }
 
@@ -1537,6 +1614,11 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
               ...state,
               rows: [...next.values()],
               lastSyncedAt: Date.now(),
+              remoteWatermark:
+                result.watermark &&
+                (!state.remoteWatermark || result.watermark > state.remoteWatermark)
+                  ? result.watermark
+                  : state.remoteWatermark,
               remoteVersion: result.version ?? state.remoteVersion,
               pagination: {
                 mode: 'progressive',
@@ -1611,7 +1693,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       }),
     )
 
-    if (syncEnabled && online()) void synchronize(false).catch(() => undefined)
+    if (syncEnabled && online()) void synchronize('flush').catch(() => undefined)
   }
 
   const onInsert = async (params: InsertMutationFnParams<TItem, string>) => {
@@ -1655,7 +1737,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   }
 
   const handleOnline = () => {
-    if (syncEnabled) void synchronize().catch(() => undefined)
+    if (syncEnabled) void synchronize('auto').catch(() => undefined)
   }
   const handleInvalidationPoll = () => {
     if (!syncEnabled) return
@@ -1707,7 +1789,9 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           initializeResolve()
           params.markReady()
         }
-        if (syncEnabled && online()) void synchronize().catch(() => undefined)
+        if (syncEnabled && online()) {
+          void synchronize('auto').catch(() => undefined)
+        }
       })()
 
       return () => {
@@ -1725,7 +1809,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   const utils: NotionCollectionUtils<TItem> = {
     async resumeSync() {
       syncEnabled = true
-      await synchronize()
+      await synchronize('full')
     },
     pauseSync() {
       syncEnabled = false
@@ -1734,7 +1818,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
         error: null,
       })
     },
-    syncNow: synchronize,
+    syncNow: () => synchronize('full'),
     checkForRemoteChanges,
     loadMore,
     getSyncState: () => syncState,
@@ -1769,7 +1853,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           await persistStateOnly({ ...state, outbox })
         }),
       )
-      if (online()) await synchronize()
+      if (online()) await synchronize('full')
       else setSyncState({ status: 'offline', error: null })
     },
     async discardPendingMutation(entryId, options) {
@@ -1802,7 +1886,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           await persistStateOnly({ ...state, outbox })
         }),
       )
-      await synchronize()
+      await synchronize('full')
     },
     async getQuarantinedState() {
       await initialization
@@ -1833,7 +1917,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
         applyRows(new Map())
         setSyncState({ status: online() ? 'idle' : 'offline', error: null })
       })
-      if (online()) await synchronize()
+      if (online()) await synchronize('full')
     },
     async resetLocalCache() {
       await initialization
@@ -1846,7 +1930,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           setSyncState({ status: online() ? 'idle' : 'offline', error: null })
         }),
       )
-      if (online()) await synchronize()
+      if (online()) await synchronize('full')
     },
   }
 
@@ -1857,6 +1941,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     pageSize: _pageSize,
     pollIntervalMs: _pollIntervalMs,
     invalidationPollIntervalMs: _invalidationPollIntervalMs,
+    fullReconciliationIntervalMs: _fullReconciliationIntervalMs,
     maxMutationsPerBatch: _maxMutationsPerBatch,
     isOnline: _isOnline,
     coordinationStrategy: _coordinationStrategy,

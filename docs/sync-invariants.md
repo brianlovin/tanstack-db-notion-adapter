@@ -39,9 +39,18 @@ partial batches. Reusing a key with another payload is a conflict.
 
 ## Pulls
 
-Accumulate every remote page in a temporary map. Publish and checkpoint only
-after pagination completes without a repeated cursor or transport failure.
-Overlay every pending outbox entry in order before publication.
+Initial and integrity pulls accumulate every remote page in a temporary map.
+Publish and checkpoint only after pagination completes without a repeated
+cursor or transport failure. Overlay every pending outbox entry in order before
+publication.
+
+Routine catch-up queries use an inclusive Notion `last_edited_time` watermark,
+merge returned rows into the local replica, and advance to the greatest remote
+timestamp observed. Inclusive filtering deliberately repeats rows at the
+watermark so equal millisecond timestamps cannot be skipped. Catch-up cannot
+observe a page that was trashed or stopped matching a fixed filter, so explicit
+sync and the periodic full reconciliation remain the deletion and membership
+integrity mechanism.
 
 For progressive read-only collections, the unit of consistency is the loaded
 window. Initial sync fetches one page. `loadMore` commits the next page, cursor,

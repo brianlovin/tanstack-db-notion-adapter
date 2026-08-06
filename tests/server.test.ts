@@ -153,6 +153,74 @@ describe('createNotionSyncHandler', () => {
     )
   })
 
+  it('queries incrementally from a last-edited watermark', async () => {
+    const notionApi = createFakeNotion()
+    notionApi.pages.set(
+      'older-page',
+      notionPage(
+        testTodo({
+          id: 'older',
+          updatedAt: '2026-08-01T12:00:00.000Z',
+        }),
+        'older-page',
+      ),
+    )
+    notionApi.pages.set(
+      'newer-page',
+      notionPage(
+        testTodo({
+          id: 'newer',
+          updatedAt: '2026-08-02T12:00:00.000Z',
+        }),
+        'newer-page',
+      ),
+    )
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notionApi.fetch as typeof fetch,
+      authorize: () => true,
+      dangerouslyAllowEphemeralIdempotency: true,
+      minimumRequestIntervalMs: 0,
+      filter: { field: 'completed', operator: 'equals', value: false },
+    })
+
+    const response = await handler(
+      new Request(
+        'http://app.test/api/todos?editedAfter=2026-08-01T12%3A00%3A00.000Z',
+      ),
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      watermark: '2026-08-02T12:00:00.000Z',
+    })
+    const query = notionApi.calls.find(({ url }) => url.pathname.endsWith('/query'))
+    expect(query?.body).toMatchObject({
+      filter: {
+        and: [
+          { property: 'Done', checkbox: { equals: false } },
+          {
+            timestamp: 'last_edited_time',
+            last_edited_time: {
+              on_or_after: '2026-08-01T12:00:00.000Z',
+            },
+          },
+        ],
+      },
+      sorts: [
+        { timestamp: 'last_edited_time', direction: 'ascending' },
+      ],
+    })
+
+    const invalid = await handler(
+      new Request('http://app.test/api/todos?editedAfter=not-a-date'),
+    )
+    expect(invalid.status).toBe(400)
+    expect((await invalid.json()).error.code).toBe('invalid_edited_after')
+  })
+
   it('verifies webhook signatures and deduplicates matching invalidations', async () => {
     const invalidationStore = createMemoryNotionInvalidationStore()
     let deliveredVerificationToken: string | null = null
