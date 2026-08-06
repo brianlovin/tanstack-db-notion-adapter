@@ -752,6 +752,141 @@ describe('notionCollectionOptions', () => {
     await collection.cleanup()
   })
 
+  it('publishes additive pages during a mutable collection bootstrap', async () => {
+    const storage = createMemoryNotionStorage()
+    const first = testTodo({ id: 'bootstrap-one', title: 'First visible page' })
+    const second = testTodo({ id: 'bootstrap-two', title: 'Final page' })
+    let resolveSecond!: (response: Response) => void
+    const secondResponse = new Promise<Response>((resolve) => {
+      resolveSecond = resolve
+    })
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      return url.searchParams.has('cursor')
+        ? secondResponse
+        : Response.json({
+            rows: [first],
+            hasMore: true,
+            nextCursor: 'bootstrap-cursor',
+            watermark: first.updatedAt,
+          })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'mutable-bootstrap',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        autoStart: false,
+        pollIntervalMs: 0,
+      }),
+    )
+
+    await collection.preload()
+    const synchronization = collection.utils.syncNow()
+    await vi.waitFor(() => {
+      expect(collection.get('bootstrap-one')?.title).toBe('First visible page')
+    })
+
+    expect(collection.get('bootstrap-two')).toBeUndefined()
+    expect(collection.utils.getSyncState()).toMatchObject({
+      status: 'syncing',
+      lastSyncedAt: null,
+    })
+    expect(await storage.load('mutable-bootstrap')).toMatchObject({
+      rows: [{ id: 'bootstrap-one' }],
+      lastSyncedAt: null,
+    })
+
+    resolveSecond(
+      Response.json({
+        rows: [second],
+        hasMore: false,
+        nextCursor: null,
+        watermark: second.updatedAt,
+      }),
+    )
+    await synchronization
+
+    expect(collection.get('bootstrap-one')).toBeDefined()
+    expect(collection.get('bootstrap-two')).toBeDefined()
+    expect(collection.utils.getSyncState().lastSyncedAt).not.toBeNull()
+    await collection.cleanup()
+  })
+
+  it('retains a partial bootstrap after a later page fails and safely retries', async () => {
+    const storage = createMemoryNotionStorage()
+    const first = testTodo({ id: 'durable-bootstrap-one' })
+    const second = testTodo({ id: 'durable-bootstrap-two' })
+    let failSecondPage = true
+    const fetch = vi.fn(async (input: string | URL | Request) => {
+      const url = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      if (!url.searchParams.has('cursor')) {
+        return Response.json({
+          rows: [first],
+          hasMore: true,
+          nextCursor: 'durable-bootstrap-cursor',
+          watermark: first.updatedAt,
+        })
+      }
+      if (failSecondPage) {
+        return Response.json(
+          {
+            error: {
+              code: 'temporary_failure',
+              message: 'The second page failed.',
+              retryable: true,
+            },
+          },
+          { status: 503 },
+        )
+      }
+      return Response.json({
+        rows: [second],
+        hasMore: false,
+        nextCursor: null,
+        watermark: second.updatedAt,
+      })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'durable-mutable-bootstrap',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        autoStart: false,
+        pollIntervalMs: 0,
+      }),
+    )
+
+    await collection.preload()
+    await expect(collection.utils.syncNow()).rejects.toThrow(
+      'The second page failed.',
+    )
+
+    expect(collection.get('durable-bootstrap-one')).toBeDefined()
+    expect(await storage.load('durable-mutable-bootstrap')).toMatchObject({
+      rows: [{ id: 'durable-bootstrap-one' }],
+      lastSyncedAt: null,
+    })
+
+    failSecondPage = false
+    await collection.utils.syncNow()
+
+    expect(collection.get('durable-bootstrap-one')).toBeDefined()
+    expect(collection.get('durable-bootstrap-two')).toBeDefined()
+    expect(collection.utils.getSyncState().lastSyncedAt).not.toBeNull()
+    await collection.cleanup()
+  })
+
   it('retains the last complete snapshot when a later remote page fails', async () => {
     const storage = createMemoryNotionStorage()
     const cached = testTodo({ id: 'last-good', title: 'Last complete snapshot' })

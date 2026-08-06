@@ -1449,10 +1449,15 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     const mode =
       requestedMode === 'full' ||
       config.syncMode === 'progressive' ||
+      state.lastSyncedAt === null ||
       !state.remoteWatermark ||
       fullReconciliationDue
         ? 'full'
         : 'incremental'
+    const publishBootstrapPages =
+      mode === 'full' &&
+      config.syncMode !== 'progressive' &&
+      state.lastSyncedAt === null
     const editedAfter = mode === 'incremental' ? state.remoteWatermark : undefined
     const remote = mode === 'full' ? new Map<string, TItem>() : new Map(rows)
     const seenCursors = new Set<string>()
@@ -1498,6 +1503,23 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           })
         }
         seenCursors.add(cursor)
+      }
+      if (publishBootstrapPages && cursor) {
+        const partial = new Map(rows)
+        for (const row of remote.values()) {
+          partial.set(config.schema.getKey(row), row)
+        }
+        for (const entry of state.outbox) {
+          applyToMap(partial, entry.batch.mutations)
+        }
+        await commitState(
+          {
+            ...state,
+            rows: [...partial.values()],
+            remoteWatermark,
+          },
+          partial,
+        )
       }
     } while (cursor && loadedPages < targetPages)
 

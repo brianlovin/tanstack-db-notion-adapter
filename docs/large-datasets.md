@@ -9,8 +9,11 @@ lifetime row count.
 
 ## Eager mutable collections
 
-The default `syncMode: 'eager'` fetches every Notion page and then atomically
-replaces the local snapshot. TanStack DB serves filters, sorting, and pagination
+The default `syncMode: 'eager'` fetches every Notion page. On the first remote
+hydration it publishes additive page checkpoints so the first rows become
+queryable without waiting for the complete scan. The final page performs the
+authoritative replacement and deletion sweep; subsequent full integrity
+refreshes remain atomic. TanStack DB serves filters, sorting, and pagination
 from memory, so repeated interaction is instant and offline. This is the right
 default for task, notes, CRM, inventory, or field applications where users edit
 data and expect global local queries.
@@ -37,8 +40,10 @@ notionCollectionOptions({
 Call `collection.utils.loadMore()` as the user approaches the end and inspect
 `getPaginationState()`. Rows and the remote cursor persist as one atomic
 checkpoint, so reload resumes the loaded window. Progressive mutable snapshots
-are intentionally forbidden: editing a partially materialized source makes
-conflict and deletion semantics ambiguous.
+are intentionally forbidden: editing a permanently partial source makes
+conflict and deletion semantics ambiguous. This is separate from eager mode's
+additive first-hydration checkpoints, which always finish as one complete
+mutable replica.
 
 ## Server-side filters and sorts
 

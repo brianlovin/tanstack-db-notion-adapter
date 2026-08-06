@@ -44,6 +44,13 @@ Publish and checkpoint only after pagination completes without a repeated
 cursor or transport failure. Overlay every pending outbox entry in order before
 publication.
 
+A first eager hydration may publish additive page checkpoints before the scan
+finishes. Those checkpoints keep `lastSyncedAt` unset and never remove a local
+row. A failed scan therefore leaves useful but explicitly incomplete data. A
+retry starts from the first remote page, and only its final complete snapshot
+may delete rows from the bootstrap. Later refreshes with an already complete
+snapshot remain atomic.
+
 Routine catch-up queries use an inclusive Notion `last_edited_time` watermark,
 merge returned rows into the local replica, and advance to the greatest remote
 timestamp observed. Inclusive filtering deliberately repeats rows at the

@@ -38,10 +38,13 @@ Schema tooling is an internal CLI Module rather than a supported package export.
 ## Collection state flow
 
 Hydration validates cached rows, commits them to TanStack DB, and marks the
-collection ready even while offline. A local transaction is normalized, split
-into at most 50-mutation batches, and committed to durable storage before the
-TanStack mutation handler resolves. The collection's synced base state changes
-only after that commit.
+collection ready even while offline. During a first eager remote hydration,
+each complete page is added to the visible and durable local bootstrap while
+`lastSyncedAt` remains unset. The final page atomically replaces that additive
+bootstrap with the authoritative complete snapshot. A local transaction is
+normalized, split into at most 50-mutation batches, and committed to durable
+storage before the TanStack mutation handler resolves. The collection's synced
+base state changes only after that commit.
 
 Synchronization acquires Web Locks or a renewable IndexedDB lease and reloads
 shared storage. The write path flushes the outbox head in FIFO order and applies

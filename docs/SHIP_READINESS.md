@@ -165,8 +165,10 @@ lost response can silently lose an acknowledged edit or create a duplicate.
   silently truncated collection snapshot.
 - [x] Add webhook-assisted invalidation while retaining polling as recovery.
 - [x] Offer progressive materialization for large read-only sources, with an
-  atomic persisted page/cursor checkpoint and loaded-window refresh. Filter
-  pushdown and mutable partial snapshots remain future work.
+  atomic persisted page/cursor checkpoint and loaded-window refresh. Eager
+  mutable collections publish additive pages during first hydration while
+  retaining a complete-snapshot requirement. Permanently partial mutable
+  snapshots remain out of scope.
 - [x] Persist an inclusive `last_edited_time` watermark for changed-row catch-up
   and retain periodic complete snapshots for deletion and filter-membership
   integrity.
