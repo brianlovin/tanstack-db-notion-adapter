@@ -7,26 +7,6 @@ server with generated end-to-end types.
 Best for private tools that people actively use: journals, task managers,
 lightweight CRMs, and small-team workflows.
 
-## Version 0.3 migration
-
-Version 0.3 keeps application-facing schema, collection, recovery, and page
-content APIs at the package root. Storage constructors, persistence envelopes,
-coordination types, protocol types, and internal Notion page representations
-now come from `tanstack-db-notion-adapter/advanced`. Collection tuning options
-also moved under an optional `tuning` object:
-
-```ts
-notionCollectionOptions({
-  id: 'journal',
-  endpoint: '/api/journal',
-  schema: notionDataSourceSchema,
-  tuning: { pollIntervalMs: 30_000 },
-})
-```
-
-`autoStart` remains a top-level lifecycle option. See
-[advanced exports](docs/operations.md#advanced-exports) for the complete list.
-
 ## Quick start
 
 Requires Node 20.19 or newer. From an existing app with a `src/` directory:
@@ -144,9 +124,8 @@ These three settings are production requirements:
 - **Authorize every request.** Never deploy
   `dangerouslyAllowUnauthenticated`; otherwise anyone who can reach the route
   can read or mutate the collection. See
-  [authentication](docs/authentication.md).
-- The handler rejects `dangerouslyAllowUnauthenticated: true` when
-  `NODE_ENV=production`; provide `authorize` instead.
+  [authentication](docs/authentication.md). The handler refuses to start with
+  that flag when `NODE_ENV=production`.
 - **Use a durable shared idempotency store.** The store must be shared by every
   server instance so retries and duplicate requests cannot create duplicate
   writes. See [durable idempotency stores](docs/idempotency-store.md).
@@ -312,6 +291,26 @@ covered in the [schema workflow](docs/schema-workflow.md).
   represent are read-only through the page-content client.
 - Files and offline media are not cached. Notion-hosted file URLs expire.
 - Page-content drafts for deleted rows are not pruned from local storage.
+
+## Upgrading to 0.3
+
+Application-facing schema, collection, recovery, and page-content APIs stay at
+the package root. Storage constructors, persistence envelopes, coordination
+types, protocol types, and internal Notion page representations moved to
+`tanstack-db-notion-adapter/advanced`. Collection tuning options moved under an
+optional `tuning` object:
+
+```ts
+notionCollectionOptions({
+  id: 'journal',
+  endpoint: '/api/journal',
+  schema: notionDataSourceSchema,
+  tuning: { pollIntervalMs: 30_000 },
+})
+```
+
+`autoStart` remains a top-level lifecycle option. See
+[advanced exports](docs/operations.md#advanced-exports) for the complete list.
 
 ## Examples
 
