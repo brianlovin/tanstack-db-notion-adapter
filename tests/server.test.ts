@@ -1101,6 +1101,231 @@ describe('createNotionSyncHandler', () => {
     expect(lookups[0]?.body.filter.or).toHaveLength(50)
   })
 
+  it('resolves a full update batch with one data-source query', async () => {
+    const notion = createFakeNotion()
+    const rows = Array.from({ length: 50 }, (_, index) => {
+      const row = testTodo({
+        id: `bulk-update-${index}`,
+        title: `Bulk task ${index}`,
+        notionPageId: `update-page-${index}`,
+      })
+      notion.pages.set(row.notionPageId!, notionPage(row, row.notionPageId!))
+      return row
+    })
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      authorize: () => true,
+      idempotencyStore: createMemoryNotionIdempotencyStore(),
+    })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'bulk-update',
+          mutations: rows.map((row) => ({
+            type: 'update',
+            key: row.id,
+            value: { ...row, completed: true },
+            base: { completed: false },
+            changes: { completed: true },
+          })),
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(
+      notion.calls.filter(
+        ({ method, url }) => method === 'POST' && url.pathname.endsWith('/query'),
+      ),
+    ).toHaveLength(1)
+    expect(
+      notion.calls.filter(
+        ({ method, url }) =>
+          method === 'GET' && url.pathname.startsWith('/v1/pages/'),
+      ),
+    ).toHaveLength(0)
+    expect(
+      notion.calls.filter(
+        ({ method, body }) => method === 'PATCH' && body?.properties?.Done,
+      ),
+    ).toHaveLength(50)
+  })
+
+  it('resolves mutation identities outside the collection working-set filter', async () => {
+    const notion = createFakeNotion()
+    const remote = testTodo({
+      id: 'filtered-row',
+      title: 'Remote title',
+      completed: true,
+      notionPageId: 'filtered-page',
+    })
+    notion.pages.set('filtered-page', notionPage(remote, 'filtered-page'))
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      filter: { field: 'completed', operator: 'equals', value: false },
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      authorize: () => true,
+      idempotencyStore: createMemoryNotionIdempotencyStore(),
+    })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'filtered-update',
+          mutations: [
+            {
+              type: 'update',
+              key: remote.id,
+              value: { ...remote, title: 'Local title' },
+              base: { title: 'Remote title' },
+              changes: { title: 'Local title' },
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const identityQuery = notion.calls.find(
+      ({ method, url }) => method === 'POST' && url.pathname.endsWith('/query'),
+    )
+    expect(identityQuery?.body.filter).toEqual({
+      property: 'Client ID',
+      rich_text: { equals: remote.id },
+    })
+    expect(testSchema.parsePage(notion.pages.get('filtered-page')!).title).toBe(
+      'Local title',
+    )
+  })
+
+  it('rejects a page ID that disagrees with the row identity', async () => {
+    const notion = createFakeNotion()
+    const remote = testTodo({
+      id: 'owned-row',
+      title: 'Original',
+      notionPageId: 'owned-page',
+    })
+    notion.pages.set('owned-page', notionPage(remote, 'owned-page'))
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      authorize: () => true,
+      idempotencyStore: createMemoryNotionIdempotencyStore(),
+    })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'mismatched-page-id',
+          mutations: [
+            {
+              type: 'update',
+              key: remote.id,
+              value: {
+                ...remote,
+                title: 'Local title',
+                notionPageId: 'outside-page',
+              },
+              base: { title: 'Original' },
+              changes: { title: 'Local title' },
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(409)
+    expect((await response.json()).error.code).toBe('page_identity_mismatch')
+    expect(
+      notion.calls.filter(({ method }) => method === 'PATCH'),
+    ).toHaveLength(0)
+  })
+
+  it('refuses page-ID-key mutations outside the configured data source', async () => {
+    const pageIdSchema = notionSchema({
+      id: notion.pageId(),
+      title: notion.title('Task'),
+    })
+    const calls: Array<{ method: string; url: URL }> = []
+    const fetch = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const url = new URL(
+          typeof input === 'string' || input instanceof URL ? input : input.url,
+        )
+        const method = init?.method ?? 'GET'
+        calls.push({ method, url })
+        if (url.pathname === '/v1/data_sources/source-1') {
+          return Response.json({ properties: { Task: { type: 'title' } } })
+        }
+        if (method === 'GET' && url.pathname === '/v1/pages/outside-page') {
+          return Response.json({
+            id: 'outside-page',
+            created_time: '2026-08-03T12:00:00.000Z',
+            last_edited_time: '2026-08-03T12:00:00.000Z',
+            url: 'https://notion.so/outside-page',
+            parent: {
+              type: 'data_source_id',
+              data_source_id: 'another-source',
+            },
+            properties: {
+              Task: { type: 'title', title: [{ plain_text: 'Original' }] },
+            },
+          })
+        }
+        return Response.json({ code: 'unhandled' }, { status: 500 })
+      },
+    )
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: pageIdSchema,
+      fetch: fetch as typeof globalThis.fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      authorize: () => true,
+      idempotencyStore: createMemoryNotionIdempotencyStore(),
+    })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'outside-source',
+          mutations: [
+            {
+              type: 'update',
+              key: 'outside-page',
+              value: { id: 'outside-page', title: 'Local title' },
+              base: { title: 'Original' },
+              changes: { title: 'Local title' },
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(404)
+    expect((await response.json()).error.code).toBe('page_outside_data_source')
+    expect(calls.filter(({ method }) => method === 'PATCH')).toHaveLength(0)
+  })
+
   it('reconciles existing insert keys with one batch lookup', async () => {
     const notion = createFakeNotion()
     const existing = testTodo({ id: 'already-there', notionPageId: 'existing-page' })

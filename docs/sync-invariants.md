@@ -75,10 +75,13 @@ Keep it FIFO. Retry after correcting the cause. Discard only while online with
 ## Property conflicts
 
 An update contains the changed fields, their base values, and the full intended
-row. The server compares only those fields with the current Notion page. Remote
-changes to other properties survive. If the same property differs from both
-the base and intended value, no patch is sent and `property_conflict` includes
-the base, local, and remote values for explicit recovery.
+row. One data-source-scoped query resolves every stable row identity in the
+batch, independent of the collection's working-set filter. The server rejects a
+supplied page ID that disagrees with that identity, then compares only the
+changed fields with the current Notion page. Remote changes to other properties
+survive. If the same property differs from both the base and intended value, no
+patch is sent and `property_conflict` includes the base, local, and remote values
+for explicit recovery.
 
 ## Content revisions
 

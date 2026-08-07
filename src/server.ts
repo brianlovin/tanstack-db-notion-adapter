@@ -1036,7 +1036,6 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     dataSourceId,
     schema: config.schema,
     idempotencyStore,
-    fixedFilter,
     ensureSchema,
     queryPages,
     requestNotion,

@@ -18,7 +18,9 @@ Notion data source + page Markdown APIs
 The browser is untrusted and never receives a Notion credential. It may propose
 rows, page IDs, and mutations; the server authenticates the application user,
 authorizes source access, validates the schema and row, and verifies a requested
-content page belongs to the configured data source.
+page belongs to the configured data source. Property mutations resolve stable
+client IDs through the configured data-source query endpoint and reject a
+client-supplied page ID that identifies a different page.
 
 The CLI is a trusted local process. It reads the PAT and source ID from env,
 inspects schema metadata, and writes a non-secret manifest and generated types.
@@ -64,12 +66,14 @@ move to quarantine; they are never silently replaced by an empty envelope.
 The server runs each batch and each individual mutation through a durable
 idempotency-store contract. The store is shared across handler instances and
 persists successful results. Individual checkpoints make partial batch retries
-safe. Before executing inserts, one compound query resolves all stable client
-IDs in the batch; newly created pages are added to that result as execution
-continues. This keeps duplicate prevention at one lookup per batch instead of
-one lookup per row. If a page-create response disappears, the handler does not
-blindly repeat the ambiguous create request. The next outbox attempt performs
-the lookup again and recovers the page Notion already created.
+safe. Before executing a mutation batch, one compound query resolves all stable
+client IDs in the configured data source; newly created pages are added to that
+result as execution continues. Inserts use the result for duplicate prevention,
+while updates use it for conflict checks and deletes use it to find their page.
+This keeps identity resolution at one lookup per batch instead of one lookup per
+row. If a page-create response disappears, the handler does not blindly repeat
+the ambiguous create request. The next outbox attempt performs the lookup again
+and recovers the page Notion already created.
 
 Notion marks queries that exceed its 10,000-result pagination depth as
 incomplete. The server rejects such a response rather than publishing a
@@ -77,9 +81,12 @@ partial snapshot as complete. Larger logical datasets must be divided into
 explicit filtered collections or separate data sources.
 
 Updates carry only the TanStack transaction's changed fields and the values on
-which those changes were based. The server reads the current page, applies
-non-overlapping fields, skips already-applied values, and returns structured
-conflict details rather than overwriting the same remotely edited property.
+which those changes were based. The batch identity query returns each current
+page; the server applies non-overlapping fields, skips already-applied values,
+and returns structured conflict details rather than overwriting the same
+remotely edited property. Identity queries deliberately ignore the collection's
+working-set filter: a row that stopped matching the filter still belongs to the
+configured data source and must remain discoverable for safe conflict handling.
 
 ## Page content flow
 

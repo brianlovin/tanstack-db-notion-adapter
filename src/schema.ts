@@ -76,6 +76,11 @@ export interface NotionPageLike {
   last_edited_time: string
   url: string
   in_trash?: boolean
+  parent?: {
+    type: string
+    data_source_id?: string
+    database_id?: string
+  }
   properties: Record<string, unknown>
 }
 

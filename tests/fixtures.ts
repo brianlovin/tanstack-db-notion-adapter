@@ -40,6 +40,7 @@ export function notionPage(
     last_edited_time: row.updatedAt,
     url: row.notionUrl ?? `https://notion.so/${pageId}`,
     in_trash: false,
+    parent: { type: 'data_source_id', data_source_id: 'source-1' },
     properties: {
       'Client ID': {
         type: 'rich_text',

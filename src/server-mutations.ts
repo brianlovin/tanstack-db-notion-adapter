@@ -142,7 +142,6 @@ interface CreateNotionMutationExecutorConfig<TFields extends NotionFields> {
   dataSourceId: string
   schema: NotionSchema<TFields>
   idempotencyStore: NotionIdempotencyStore | null
-  fixedFilter: Record<string, unknown> | null
   ensureSchema: (signal?: AbortSignal) => Promise<void>
   queryPages: (
     body: Record<string, unknown>,
@@ -187,10 +186,7 @@ export function createNotionMutationExecutor<
       property: idPropertyReference,
       rich_text: { equals: key },
     }))
-    const keyFilter = keyFilters.length === 1 ? keyFilters[0]! : { or: keyFilters }
-    const filter = config.fixedFilter
-      ? { and: [keyFilter, structuredClone(config.fixedFilter)] }
-      : keyFilter
+    const filter = keyFilters.length === 1 ? keyFilters[0]! : { or: keyFilters }
     const seenCursors = new Set<string>()
     let cursor: string | null = null
     do {
@@ -234,27 +230,46 @@ export function createNotionMutationExecutor<
     return pagesByKey
   }
 
-  async function findPageByKey(
-    key: string,
-    signal?: AbortSignal,
-  ): Promise<NotionPageLike | null> {
-    const pages = await findPagesByKeys([key], signal)
-    return pages.get(key) ?? null
-  }
-
   async function resolvePage(
     mutation: NotionMutation<TItem>,
     signal?: AbortSignal,
+    prefetchedPages?: Map<string, NotionPageLike>,
   ): Promise<NotionPageLike | null> {
+    if (prefetchedPages) {
+      const page = prefetchedPages.get(mutation.key) ?? null
+      const suppliedPageId = config.schema.getPageId(mutation.value)
+      if (page && suppliedPageId && suppliedPageId !== page.id) {
+        throw new NotionHttpError({
+          status: 409,
+          code: 'page_identity_mismatch',
+          message: 'The row key and Notion page ID identify different pages.',
+          retryable: false,
+        })
+      }
+      return page
+    }
+
     const pageId = config.schema.getPageId(mutation.value)
     if (pageId) {
       const page = await config.requestNotion<unknown>(
         `/v1/pages/${encodeURIComponent(pageId)}`,
         signal ? { signal } : {},
       )
-      return isPage(page) ? page : null
+      if (!isPage(page)) return null
+      if (
+        page.parent?.type !== 'data_source_id' ||
+        page.parent.data_source_id !== config.dataSourceId
+      ) {
+        throw new NotionHttpError({
+          status: 404,
+          code: 'page_outside_data_source',
+          message: 'The requested page is not part of this data source.',
+          retryable: false,
+        })
+      }
+      return page
     }
-    return findPageByKey(mutation.key, signal)
+    return null
   }
 
   async function updatePage(
@@ -287,13 +302,19 @@ export function createNotionMutationExecutor<
   async function applyMutation(
     mutation: NotionMutation<TItem>,
     signal?: AbortSignal,
-    prefetchedInsertPages?: Map<string, NotionPageLike>,
+    prefetchedPages?: Map<string, NotionPageLike>,
   ): Promise<{ row?: TItem; deletedKey?: string }> {
     switch (mutation.type) {
       case 'insert': {
-        const existing = prefetchedInsertPages
-          ? (prefetchedInsertPages.get(mutation.key) ?? null)
-          : await findPageByKey(mutation.key, signal)
+        if (!prefetchedPages) {
+          throw new NotionHttpError({
+            status: 405,
+            code: 'read_only_key',
+            message: 'A Notion page-ID key cannot be used for inserts.',
+            retryable: false,
+          })
+        }
+        const existing = prefetchedPages.get(mutation.key) ?? null
         if (existing) {
           const row = config.schema.parsePage(existing)
           if (
@@ -330,11 +351,11 @@ export function createNotionMutationExecutor<
             retryable: true,
           })
         }
-        prefetchedInsertPages?.set(mutation.key, created)
+        prefetchedPages.set(mutation.key, created)
         return { row: config.schema.parsePage(created) }
       }
       case 'update': {
-        const existing = await resolvePage(mutation, signal)
+        const existing = await resolvePage(mutation, signal, prefetchedPages)
         if (!existing) {
           throw new NotionHttpError({
             status: 404,
@@ -385,7 +406,7 @@ export function createNotionMutationExecutor<
         }
       }
       case 'delete': {
-        const existing = await resolvePage(mutation, signal)
+        const existing = await resolvePage(mutation, signal, prefetchedPages)
         if (existing) {
           await config.requestNotion(
             `/v1/pages/${encodeURIComponent(existing.id)}`,
@@ -491,12 +512,13 @@ export function createNotionMutationExecutor<
       normalizedMutations.push(normalized)
     }
 
-    const prefetchedInsertPages = await findPagesByKeys(
-      normalizedMutations
-        .filter((mutation) => mutation.type === 'insert')
-        .map((mutation) => mutation.key),
-      signal,
-    )
+    const prefetchedPages =
+      idPropertyName && idPropertyReference
+        ? await findPagesByKeys(
+            normalizedMutations.map((mutation) => mutation.key),
+            signal,
+          )
+        : undefined
     const rows: Array<TItem> = []
     const deletedKeys: Array<string> = []
     for (const [mutationIndex, normalized] of normalizedMutations.entries()) {
@@ -510,9 +532,9 @@ export function createNotionMutationExecutor<
                   config.schema.serialize(normalized.value),
                 ),
               },
-              () => applyMutation(normalized, signal, prefetchedInsertPages),
+              () => applyMutation(normalized, signal, prefetchedPages),
             )
-          : await applyMutation(normalized, signal, prefetchedInsertPages)
+          : await applyMutation(normalized, signal, prefetchedPages)
       const result = config.idempotencyStore
         ? await config.idempotencyStore.execute(
             {

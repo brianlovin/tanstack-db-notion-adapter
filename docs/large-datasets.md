@@ -117,10 +117,16 @@ every instance should use a distributed limiter with the same
 
 ## Bulk writes
 
-For a batch of up to 50 inserts, the handler performs one filtered lookup for
-all client IDs and then one page-create request per new row. A fully new batch
-therefore needs `N + 1` Notion requests rather than `2N`. The lookup preserves
-duplicate prevention and lost-response recovery.
+For a batch of up to 50 mutations, the handler performs one data-source query
+for all client IDs. It then makes one write request per row that actually needs
+a change. A fully new insert batch or update batch therefore needs at most
+`N + 1` Notion requests rather than `2N`. The query preserves insert duplicate
+prevention, lost-response recovery, and update conflict checks.
+
+Identity queries cover the whole configured data source, even when the handler
+uses a fixed working-set filter. This prevents a row that was remotely moved out
+of the working set from being mistaken for a missing row. The filter controls
+which rows are replicated; it is not a row-level authorization boundary.
 
 Notion does not provide a bulk page-create endpoint, so large initial imports
 remain bounded by one create request per row and the connection's rate limit.
