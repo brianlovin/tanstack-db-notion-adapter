@@ -72,10 +72,17 @@ safe. Before executing a mutation batch, one compound query resolves all stable
 client IDs in the configured data source; newly created pages are added to that
 result as execution continues. Inserts use the result for duplicate prevention,
 while updates use it for conflict checks and deletes use it to find their page.
-This keeps identity resolution at one lookup per batch instead of one lookup per
-row. If a page-create response disappears, the handler does not blindly repeat
-the ambiguous create request. The next outbox attempt performs the lookup again
-and recovers the page Notion already created.
+On a prefetch miss, updates and deletes fall back to the explicit Notion page ID
+carried by the row, so pages created directly in Notion with an empty Client ID
+can be claimed safely. The row key itself is also accepted as a UUID-shaped
+page-ID fallback when no page-ID field exists. A successful claim backfills the
+Client ID in the same minimal update. Deletes of a carried page ID that is
+already trashed or gone are idempotent; deletes with no identifiable page fail
+instead of reporting a false success. This keeps identity resolution at one
+lookup per batch instead of one lookup per row. If a page-create response
+disappears, the handler does not blindly repeat the ambiguous create request.
+The next outbox attempt performs the lookup again and recovers the page Notion
+already created.
 
 Notion marks queries that exceed its 10,000-result pagination depth as
 incomplete. The server rejects such a response rather than publishing a

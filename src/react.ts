@@ -18,6 +18,7 @@ const serverSyncState: NotionSyncState = {
   storage: 'unavailable',
   error: null,
   quarantine: null,
+  blockedMutation: null,
 }
 
 export interface NotionSyncStateCollection<TItem extends object> {

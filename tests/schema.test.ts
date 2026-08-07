@@ -303,12 +303,100 @@ describe('notionSchema', () => {
   it('rejects invalid property values with field paths', async () => {
     const result = await testSchema['~standard'].validate({
       title: 'Invalid priority',
-      priority: 'Urgent',
+      priority: 42,
     })
 
     expect(result).toHaveProperty('issues')
     if (!('issues' in result)) throw new Error('Expected schema issues')
     expect(result.issues?.[0]?.path).toEqual(['priority'])
+  })
+
+  it('accepts unknown select, status, and multi-select values', async () => {
+    const schema = notionSchema({
+      id: notion.id('Client ID'),
+      title: notion.title('Name'),
+      priority: notion.select('Priority', ['Low', 'High'] as const),
+      state: notion.status('State', ['Open', 'Closed'] as const),
+      tags: notion.multiSelect('Tags', ['Work', 'Life'] as const),
+    })
+    type Input = InferNotionInput<typeof schema.fields>
+    const input: Input = {
+      id: 'row-1',
+      title: 'Unknown options',
+      priority: 'Urgent',
+      state: 'Blocked',
+      tags: ['Experimental'],
+    }
+
+    const result = await schema['~standard'].validate(input)
+    expect(result).toHaveProperty('value')
+  })
+
+  it('chunks long plain rich text and title values', () => {
+    const schema = notionSchema({
+      id: notion.id('Client ID'),
+      title: notion.title('Name'),
+      notes: notion.richText('Notes'),
+    })
+    const value = 'x'.repeat(5000)
+    const serialized = schema.serialize({
+      id: 'row-1',
+      title: value,
+      notes: value,
+    })
+
+    const title = serialized.Name?.title as Array<any>
+    const notes = serialized.Notes?.rich_text as Array<any>
+    expect(title).toHaveLength(3)
+    expect(notes).toHaveLength(3)
+    expect(
+      title.map((item) => item.text.content).join(''),
+    ).toBe(value)
+    expect(
+      notes.map((item) => item.text.content).join(''),
+    ).toBe(value)
+    expect(
+      [...title, ...notes].every((item) => item.text.content.length <= 2000),
+    ).toBe(true)
+  })
+
+  it('keeps astral characters intact at rich text chunk boundaries', () => {
+    const value = `${'x'.repeat(1999)}😀`
+    const serialized = testSchema.serialize(
+      testTodo({ id: 'astral-row', title: value }),
+    )
+    const title = serialized.Task?.title as Array<any>
+    const page = notionPage(testTodo({ id: 'astral-row' }), 'astral-page')
+    page.properties.Task = serialized.Task!
+
+    expect(title).toHaveLength(1)
+    expect(testSchema.parsePage(page).title).toBe(value)
+  })
+
+  it('rejects rich text values over Notion’s 100-item limit locally', () => {
+    const schema = notionSchema({
+      id: notion.id('Client ID'),
+      title: notion.titleItems('Name'),
+    })
+    const annotations = {
+      bold: false,
+      italic: false,
+      strikethrough: false,
+      underline: false,
+      code: false,
+      color: 'default',
+    }
+    const items = Array.from({ length: 101 }, (_, index) => ({
+      type: 'text' as const,
+      text: { content: `item-${index}`, link: null },
+      annotations,
+      plainText: `item-${index}`,
+      href: null,
+    }))
+
+    expect(() =>
+      schema.serialize({ id: 'row-1', title: items }),
+    ).toThrow('Name exceeds Notion rich text limit of 100 items')
   })
 
   it('requires one stable or page id and one title field', () => {

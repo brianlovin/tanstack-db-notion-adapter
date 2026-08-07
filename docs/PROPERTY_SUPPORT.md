@@ -10,9 +10,9 @@ types omit read-only fields; generated row types include them. A property marked
 | Rich text | Yes | Yes | `string`, or `NotionRichTextItem[]` with `notion.richTextItems` | Rich mode preserves annotations, mentions, links, and equations. |
 | Checkbox | Yes | Yes | `boolean` | — |
 | Number | Yes | Yes | `number \| null` | Number format is not currently managed by schema push. |
-| Select | Yes | Yes | option-name literal union or `null` | Option colors are retained in the manifest; runtime values use names. |
-| Multi-select | Yes | Yes | array of option-name literals | Option colors are retained in the manifest; runtime values use names. |
-| Status | Yes | Yes | option-name literal union or `null` | Notion does not permit status schema updates through this API. |
+| Select | Yes | Yes | declared option names plus open `string`, or `null` | Unknown options flow through; declared options provide autocomplete. |
+| Multi-select | Yes | Yes | array of declared option names plus open `string` | Unknown options flow through; declared options provide autocomplete. |
+| Status | Yes | Yes | declared option names plus open `string`, or `null` | Unknown options flow through; Notion does not permit status schema updates through this API. |
 | Date | Yes | Yes | ISO start string or `null`, or `NotionDateValue` with `notion.dateRange` | Range mode preserves `end` and `timeZone`. |
 | URL | Yes | Yes | `string \| null` | — |
 | Email | Yes | Yes | `string \| null` | — |
@@ -58,7 +58,19 @@ IDs, and runtime parsing, writing, filters, and sorts prefer those IDs. The
 schema workflow currently manages additions, renames, type changes, and
 select/multi-select option names and colors. It intentionally does not rewrite
 status configuration, formulas, relations, rollups, descriptions, or number
-formatting. Make those changes in Notion and run `pull`.
+formatting. Select, status, and multi-select values are intentionally lenient:
+an option added in Notion flows through reads and writes as a string instead of
+failing the pull or poisoning an unrelated edit. Declared options provide
+TypeScript autocomplete and define the `push`/`check` contract; they are not a
+runtime enum. Make option changes in Notion and use `pull` or `check` when you
+want the manifest to record that drift.
+
+Structural drift is still strict. Missing properties and changed property
+types continue to fail schema validation.
+
+String-mode titles and rich text are split into Notion-compatible chunks of at
+most 2000 Unicode code points. Values requiring more than 100 rich-text items
+fail locally with a non-retryable schema error that names the field.
 
 ## Page contents are separate
 

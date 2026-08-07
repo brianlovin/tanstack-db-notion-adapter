@@ -69,19 +69,28 @@ the pagination checkpoint. Mutable collections cannot use progressive sync.
 ## Errors and recovery
 
 Record attempt count, time, code, status, and retryability on the failed head.
-Keep it FIFO. Retry after correcting the cause. Discard only while online with
-`acceptDataLoss: true`, then refresh the remote snapshot.
+Keep it FIFO. `NotionSyncState.blockedMutation` exposes the head entry ID and
+sanitized error when that error is non-retryable, so the UI can offer retry or
+explicit discard without inspecting storage directly. Retry after correcting
+the cause. Discard only while online with `acceptDataLoss: true`, then refresh
+the remote snapshot.
 
 ## Property conflicts
 
 An update contains the changed fields, their base values, and the full intended
 row. One data-source-scoped query resolves every stable row identity in the
-batch, independent of the collection's working-set filter. The server rejects a
-supplied page ID that disagrees with that identity, then compares only the
-changed fields with the current Notion page. Remote changes to other properties
-survive. If the same property differs from both the base and intended value, no
-patch is sent and `property_conflict` includes the base, local, and remote values
-for explicit recovery.
+batch, independent of the collection's working-set filter. On a prefetch miss,
+the server falls back to the row's explicit Notion page ID; a UUID-shaped row
+key is also accepted as a page-ID fallback when no page-ID field exists. The
+resolved page must belong to the configured data source and agree with the row
+identity. A page with an empty Client ID receives the row key as a Client ID
+backfill in the same minimal PATCH. Deletes are idempotent only when a carried
+page identity proves the page is already gone; an unidentifiable delete fails
+non-retryably instead of succeeding as a no-op. The server then compares only
+the changed fields with the current Notion page. Remote changes to other
+properties survive. If the same property differs from both the base and
+intended value, no patch is sent and `property_conflict` includes the base,
+local, and remote values for explicit recovery.
 
 ## Content revisions
 
@@ -97,9 +106,12 @@ resolution.
   lease serialization, and stale-revision fencing.
 - `tests/client.test.ts`: queue/checkpoint failures, FIFO, overlays, recovery,
   migrations, quarantine, progressive pagination/offline hydration, structured
-  conflicts, and large transactions.
+  conflicts, blocked mutation state, and large transactions.
 - `tests/server.test.ts`: endpoint trust boundary, request limits, Notion CRUD,
-  concurrent handlers, partial batches, lost responses, property merges,
-  source scoping, and Markdown conflicts.
-- `tests/content-client.test.ts`: debounce, in-flight edits, reload recovery,
-  offline page attachment, and content conflicts.
+  native-row page-ID fallback and Client ID backfill, non-no-op deletes,
+  select-option drift, rich-text limits, concurrent handlers, partial batches,
+  lost responses, property merges, source scoping, and Markdown conflicts.
+- `tests/schema.test.ts`: open option domains, Unicode-safe rich-text chunking,
+  and the 100-item local limit.
+- `tests/content-client.test.ts`: debounce, in-flight edits, compare-and-set
+  reload/retry convergence, offline page attachment, and content conflicts.

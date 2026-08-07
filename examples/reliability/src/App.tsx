@@ -40,6 +40,7 @@ const fallbackSyncState: NotionSyncState = {
   storage: 'indexeddb',
   error: null,
   quarantine: null,
+  blockedMutation: null,
 }
 
 const initialStatuses: Record<ScenarioKey, ScenarioStatus> = {

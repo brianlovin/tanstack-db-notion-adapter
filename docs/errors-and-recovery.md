@@ -23,6 +23,31 @@ await collection.utils.discardPendingMutation(entryId, {
 Discard is a data-loss operation and should require a user confirmation. Show
 `attempts` and the sanitized `lastError`; do not expose request bodies.
 
+The primary signal that recovery is required is `blockedMutation` from
+`useNotionSyncState`:
+
+```tsx
+import { useNotionSyncState } from 'tanstack-db-notion-adapter/react'
+
+const sync = useNotionSyncState(collection)
+const blocked = sync.blockedMutation
+
+if (blocked) {
+  // Render blocked.error.message and offer:
+  await collection.utils.retryPendingMutation(blocked.entryId)
+  // Or, after confirmation:
+  await collection.utils.discardPendingMutation(blocked.entryId, {
+    acceptDataLoss: true,
+  })
+}
+```
+
+It contains the FIFO head entry ID and a sanitized `NotionOutboxError` only
+when that failure is non-retryable. It is `null` for retryable failures and
+clears after retry or discard. A mutation's `tx.isPersisted` promise resolves
+when the local durable outbox accepts it; it does not mean Notion accepted the
+write, and server rejection does not roll the transaction back.
+
 ## Error classes
 
 - `unauthorized` / HTTP 401 or 403: restore the application session. Keep the

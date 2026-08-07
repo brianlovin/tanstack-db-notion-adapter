@@ -106,6 +106,48 @@ describe('createNotionPageContentClient', () => {
     client.cleanup()
   })
 
+  it('reloads and reapplies a draft after a storage revision conflict', async () => {
+    const storage = createMemoryNotionStorage()
+    const fetch = vi.fn(async () => Response.json(content('Original')))
+    const first = createNotionPageContentClient({
+      id: 'revision-conflict-content',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: fetch as typeof globalThis.fetch,
+      debounceMs: 60_000,
+      autoStart: false,
+    })
+    const second = createNotionPageContentClient({
+      id: 'revision-conflict-content',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: fetch as typeof globalThis.fetch,
+      debounceMs: 60_000,
+      autoStart: false,
+    })
+
+    await first.load('note-1', 'page-1')
+    await second.load('note-1', 'page-1')
+    await first.update('note-1', 'First tab draft')
+    await second.update('note-1', 'Second tab draft')
+
+    expect(second.get('note-1')).toMatchObject({
+      markdown: 'Second tab draft',
+      pending: true,
+      status: 'saved-local',
+    })
+    const persisted = await storage.load<NotionPageContentSnapshot>(
+      'revision-conflict-content:page-content',
+    )
+    expect(persisted?.rows[0]).toMatchObject({
+      markdown: 'Second tab draft',
+      pending: true,
+    })
+
+    first.cleanup()
+    second.cleanup()
+  })
+
   it('coalesces edits made while a content write is in flight', async () => {
     const storage = createMemoryNotionStorage()
     let resolveFirstWrite!: (response: Response) => void

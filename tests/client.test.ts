@@ -1188,6 +1188,7 @@ describe('notionCollectionOptions', () => {
     expect(collection.utils.getSyncState()).toMatchObject({
       status: 'error',
       pendingMutations: 1,
+      blockedMutation: null,
     })
     expect(await collection.utils.getPendingMutations()).toMatchObject([
       {
@@ -1362,10 +1363,21 @@ describe('notionCollectionOptions', () => {
       attempts: 1,
       lastError: { code: 'schema_mismatch', status: 422, retryable: false },
     })
+    expect(collection.utils.getSyncState()).toMatchObject({
+      blockedMutation: {
+        entryId: failed!.id,
+        error: {
+          code: 'schema_mismatch',
+          status: 422,
+          retryable: false,
+        },
+      },
+    })
 
     rejectWrite = false
     await collection.utils.retryPendingMutation(failed!.id)
     expect(await collection.utils.getPendingMutations()).toHaveLength(0)
+    expect(collection.utils.getSyncState().blockedMutation).toBeNull()
     expect(collection.get('recover-1')?.notionPageId).toBe('page-recover-1')
     await collection.cleanup()
   })
@@ -1416,6 +1428,7 @@ describe('notionCollectionOptions', () => {
       acceptDataLoss: true,
     })
     expect(await collection.utils.getPendingMutations()).toHaveLength(0)
+    expect(collection.utils.getSyncState().blockedMutation).toBeNull()
     expect(collection.get('discard-1')).toBeUndefined()
     expect(fetch).toHaveBeenCalledTimes(1)
     await collection.cleanup()
