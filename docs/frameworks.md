@@ -55,7 +55,7 @@ If a collection module loads before the browser session is ready, defer remote
 requests while still hydrating local data:
 
 ```ts
-// src/data/journal.ts — client
+// data/journal.ts — client
 export const entries = createCollection(
   notionCollectionOptions({
     id: 'journal',

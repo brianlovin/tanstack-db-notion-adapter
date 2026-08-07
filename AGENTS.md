@@ -17,8 +17,8 @@ Notes on 5174/8788.
 
 Bump `version` in `package.json` and `package-lock.json` in a pull request. When
 that pull request reaches `main`, `.github/workflows/publish.yml` runs the full
-release check and publishes the exact version if it is not already on npm. Do
-not publish releases manually.
+release check, publishes the exact version if it is not already on npm, and
+creates the matching GitHub tag and release. Do not publish releases manually.
 
 ## Ownership boundaries
 
@@ -29,7 +29,7 @@ not publish releases manually.
 - `src/content-client.ts`: lazy durable enhanced-Markdown page bodies.
 - `examples/`: acceptance examples, not package internals.
 
-Edit `notion.schema.json`, then regenerate `src/notion.generated.ts`. Do not
+Edit `notion.schema.json`, then regenerate `notion.generated.ts`. Do not
 hand-edit generated files. Preserve unrelated working-tree changes.
 
 ## Non-negotiable behavior

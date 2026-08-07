@@ -60,7 +60,7 @@ Commands:
 Options:
   --env <path>            Load PAT and IDs from an env file (default: .env.local, .env)
   --manifest <path>       Manifest path (default: notion.schema.json)
-  --out <path>            Generated TypeScript path (default: src/notion.generated.ts)
+  --out <path>            Generated TypeScript path (default: notion.generated.ts)
   --id <id-or-url>        Data source ID, database ID, or Notion database URL
   --name <exportName>     Generated schema export name
   --sync-key <name>       Stable rich-text key (default: Client ID)

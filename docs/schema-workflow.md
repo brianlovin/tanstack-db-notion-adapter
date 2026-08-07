@@ -61,7 +61,10 @@ For a non-interactive coding agent or CI job, put `NOTION_PAT` in `.env.local`
 and run `npx tanstack-db-notion init --id "<database URL or ID>"`. The resolved
 source ID is saved even though it was supplied with a flag.
 
-The default outputs are `notion.schema.json` and `src/notion.generated.ts`.
+The default outputs are `notion.schema.json` and `notion.generated.ts` in the
+directory where the command runs. Existing projects that already generated to
+`src/notion.generated.ts` keep using that path. The CLI does not otherwise
+assume an application directory structure.
 `--env`, `--manifest`, `--out`, `--id`, and `--name` remain available for
 monorepos or custom layouts.
 

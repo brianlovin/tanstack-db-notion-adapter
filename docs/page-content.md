@@ -18,7 +18,7 @@ const sync = createNotionSyncHandler({
 Connect the content client to the row collection:
 
 ```ts
-// src/data/notes.ts — client
+// data/notes.ts — client
 export const noteContent = createNotionPageContentClient({
   id: 'notes',
   endpoint: '/api/notes',
@@ -35,7 +35,7 @@ note is not selected.
 Create the durable body before inserting its row:
 
 ```ts
-// src/actions.ts — client
+// actions.ts — client
 const id = crypto.randomUUID()
 await noteContent.createDraft(id, '# New note')
 notes.insert({ id, title: 'New note' })
@@ -44,7 +44,7 @@ notes.insert({ id, title: 'New note' })
 Open an existing page with `attachPage`, then update it locally:
 
 ```ts
-// src/Editor.tsx — client
+// Editor.tsx — client
 await noteContent.attachPage(note.id, note.notionPageId)
 await noteContent.update(note.id, nextMarkdown)
 ```
@@ -59,7 +59,7 @@ read; most editors should use `attachPage`.
 revalidated when the window regains focus and every 60 seconds by default:
 
 ```ts
-// src/data/notes.ts — client
+// data/notes.ts — client
 export const noteContent = createNotionPageContentClient({
   id: 'notes',
   endpoint: '/api/notes',
@@ -80,7 +80,7 @@ signal rather than the changed content, so the browser still retrieves the
 latest watched page after observing a version change:
 
 ```ts
-// src/data/notes.ts — client
+// data/notes.ts — client
 export const noteContent = createNotionPageContentClient({
   id: 'notes',
   endpoint: '/api/notes',

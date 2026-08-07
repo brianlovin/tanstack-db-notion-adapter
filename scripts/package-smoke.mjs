@@ -100,7 +100,7 @@ try {
   const { stdout: cliHelp } = await run(cli, ['--help'])
   if (
     !cliHelp.includes('push       Update Notion') ||
-    !cliHelp.includes('default: src/notion.generated.ts')
+    !cliHelp.includes('default: notion.generated.ts')
   ) {
     throw new Error('Packed CLI did not print help.')
   }

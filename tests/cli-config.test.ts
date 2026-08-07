@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
@@ -21,10 +21,29 @@ afterEach(() => {
 })
 
 describe('CLI conventions', () => {
-  it('generates into src beside the default manifest', () => {
-    expect(defaultGeneratedPath('/project/notion.schema.json')).toBe(
-      '/project/src/notion.generated.ts',
-    )
+  it('generates beside the manifest without assuming a source directory', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'notion-cli-default-'))
+    try {
+      expect(defaultGeneratedPath(join(directory, 'notion.schema.json'))).toBe(
+        join(directory, 'notion.generated.ts'),
+      )
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps updating an existing legacy generated path', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'notion-cli-legacy-'))
+    try {
+      await mkdir(join(directory, 'src'))
+      await writeFile(join(directory, 'src/notion.generated.ts'), '')
+
+      expect(defaultGeneratedPath(join(directory, 'notion.schema.json'))).toBe(
+        join(directory, 'src/notion.generated.ts'),
+      )
+    } finally {
+      await rm(directory, { recursive: true, force: true })
+    }
   })
 
   it('loads .env.local before .env without overwriting its values', async () => {

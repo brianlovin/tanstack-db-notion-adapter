@@ -39,8 +39,9 @@ npx tanstack-db-notion init
 ```
 
 The CLI loads `.env.local` and `.env`, prompts for missing credentials, and
-uses `notion.schema.json` plus `src/notion.generated.ts` by convention. Use
-flags only when the repository layout requires an override.
+creates `notion.schema.json` plus `notion.generated.ts` in the working
+directory. It does not assume an application directory structure; use flags
+only when the repository layout requires an override.
 
 Coding agents normally have no TTY. Put `NOTION_PAT` in `.env.local`, then run
 `npx tanstack-db-notion init --id "<database URL or ID>"` non-interactively.

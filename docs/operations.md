@@ -55,7 +55,7 @@ application, and aggregate rates and latency rather than copying user data into
 logs.
 
 ```ts
-// src/server/notion-telemetry.ts
+// server/notion-telemetry.ts
 import type { NotionServerEvent } from 'tanstack-db-notion-adapter/server'
 
 const counts = new Map<string, number>()

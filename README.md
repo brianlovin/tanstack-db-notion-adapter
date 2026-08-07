@@ -9,8 +9,6 @@ lightweight CRMs, and small-team workflows.
 
 ## Quick start
 
-Requires Node 20.19 or newer. From an existing app with a `src/` directory:
-
 ### 1. Install and generate a schema
 
 ```sh
@@ -22,7 +20,7 @@ npx tanstack-db-notion init
 configuration in `.env.local` and creates:
 
 - `notion.schema.json` — the checked-in schema contract
-- `src/notion.generated.ts` — the generated TypeScript schema and types
+- `notion.generated.ts` — the generated TypeScript schema and types
 
 Keep the PAT server-only. Do not expose it to browser code.
 
@@ -50,7 +48,7 @@ import {
   createMemoryNotionIdempotencyStore,
   createNotionSyncHandler,
 } from 'tanstack-db-notion-adapter/server'
-import { notionDataSourceSchema } from '@/notion.generated'
+import { notionDataSourceSchema } from '../../../notion.generated'
 
 const sync = createNotionSyncHandler({
   token: process.env.NOTION_PAT!,
@@ -63,14 +61,14 @@ export const GET = sync
 export const POST = sync
 ```
 
-This is the shortest local-development route. Before deployment, add
-`authorize` and replace the in-memory idempotency store; see
-[Before you ship](#before-you-ship).
+This is the shortest local-development route. See
+[production recommendations](#production-recommendations) when deciding how to
+deploy it.
 
 ### 4. Create the collection
 
 ```ts
-// src/data/journal.ts — client
+// data/journal.ts — client
 import { createCollection } from '@tanstack/react-db'
 import { notionCollectionOptions } from 'tanstack-db-notion-adapter'
 import { notionDataSourceSchema } from '../notion.generated'
@@ -90,7 +88,7 @@ Next.js users should mount the collection below a client-only boundary; see
 ### 5. Read it with `useLiveQuery`
 
 ```tsx
-// src/Journal.tsx — client
+// Journal.tsx — client
 import { useLiveQuery } from '@tanstack/react-db'
 import { entries } from './data/journal'
 
@@ -117,21 +115,19 @@ The generated file also exports `NotionDataSourceSchemaInput` for inserts and
 update helpers, and `NotionDataSourceSchemaRow` for fetched records. The input
 type omits read-only Notion metadata.
 
-### Before you ship
+### Production recommendations
 
-These three settings are production requirements:
+Choose the safeguards that fit how your app is deployed:
 
-- **Authorize every request.** Never deploy
-  `dangerouslyAllowUnauthenticated`; otherwise anyone who can reach the route
-  can read or mutate the collection. See
-  [authentication](docs/authentication.md). The handler refuses to start with
-  that flag when `NODE_ENV=production`.
-- **Use a durable shared idempotency store.** The store must be shared by every
-  server instance so retries and duplicate requests cannot create duplicate
-  writes. See [durable idempotency stores](docs/idempotency-store.md).
-- **Render blocked mutations in the UI.** `tx.isPersisted` means the mutation
-  is durable on this device, not that Notion accepted it. See
-  [errors and recovery](docs/errors-and-recovery.md).
+- **Protect the sync route.** Add `authorize` or enforce access before the
+  handler when the endpoint should not be public. See
+  [authentication](docs/authentication.md).
+- **Use shared durable idempotency for multi-instance servers.** This keeps
+  retries handled consistently across processes. See
+  [durable idempotency stores](docs/idempotency-store.md).
+- **Surface blocked mutations when users need recovery controls.**
+  `tx.isPersisted` means the mutation is durable on this device, not that
+  Notion accepted it. See [errors and recovery](docs/errors-and-recovery.md).
 
 ## Mutations and recovery
 
@@ -203,7 +199,7 @@ Database properties and page bodies are separate in Notion. For journals and
 notes, enable `pageContent: true` on the server and create a content client:
 
 ```ts
-// src/data/journal-content.ts — client
+// data/journal-content.ts — client
 import { createNotionPageContentClient } from 'tanstack-db-notion-adapter'
 import { entries } from './journal'
 
@@ -218,7 +214,7 @@ Attach an existing row before rendering its body. The hook subscribes to local
 state; `attachPage` performs the initial fetch:
 
 ```tsx
-// src/Editor.tsx — client
+// Editor.tsx — client
 import { useNotionPageContent } from 'tanstack-db-notion-adapter/react'
 import { useEffect } from 'react'
 import { entryContent } from './data/journal-content'
@@ -262,8 +258,8 @@ writes, direct Notion edits, webhooks, and conflict handling.
 
 ## Schema commands
 
-The CLI automatically loads `.env.local`, `.env`, `notion.schema.json`, and
-`src/notion.generated.ts`:
+The CLI automatically loads `.env.local`, `.env`, and `notion.schema.json`, then
+regenerates `notion.generated.ts`:
 
 ```sh
 npx tanstack-db-notion push --dry-run  # preview local changes
@@ -291,26 +287,6 @@ covered in the [schema workflow](docs/schema-workflow.md).
   represent are read-only through the page-content client.
 - Files and offline media are not cached. Notion-hosted file URLs expire.
 - Page-content drafts for deleted rows are not pruned from local storage.
-
-## Upgrading to 0.3
-
-Application-facing schema, collection, recovery, and page-content APIs stay at
-the package root. Storage constructors, persistence envelopes, coordination
-types, protocol types, and internal Notion page representations moved to
-`tanstack-db-notion-adapter/advanced`. Collection tuning options moved under an
-optional `tuning` object:
-
-```ts
-notionCollectionOptions({
-  id: 'journal',
-  endpoint: '/api/journal',
-  schema: notionDataSourceSchema,
-  tuning: { pollIntervalMs: 30_000 },
-})
-```
-
-`autoStart` remains a top-level lifecycle option. See
-[advanced exports](docs/operations.md#advanced-exports) for the complete list.
 
 ## Examples
 

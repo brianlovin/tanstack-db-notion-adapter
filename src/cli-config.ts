@@ -3,7 +3,12 @@ import { readFile, writeFile } from 'node:fs/promises'
 import { basename, dirname, resolve } from 'node:path'
 
 export function defaultGeneratedPath(manifestPath: string): string {
-  return resolve(dirname(manifestPath), 'src/notion.generated.ts')
+  const directory = dirname(manifestPath)
+  const destination = resolve(directory, 'notion.generated.ts')
+  const legacyDestination = resolve(directory, 'src/notion.generated.ts')
+  return !existsSync(destination) && existsSync(legacyDestination)
+    ? legacyDestination
+    : destination
 }
 
 export function loadCliEnvironment(
