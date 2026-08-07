@@ -13,6 +13,13 @@ npm run test:package
 Use `npm run dev` for Todos on ports 5173/8787 and `npm run dev:notes` for
 Notes on 5174/8788.
 
+## Releases
+
+Bump `version` in `package.json` and `package-lock.json` in a pull request. When
+that pull request reaches `main`, `.github/workflows/publish.yml` runs the full
+release check and publishes the exact version if it is not already on npm. Do
+not publish releases manually.
+
 ## Ownership boundaries
 
 - `src/schema.ts`: codecs and Standard Schema inference.
