@@ -12,7 +12,7 @@ import {
   createNotionWebhookHandler,
   resolveNotionDataSourceId,
 } from '../src/server.js'
-import type { NotionMutationBatch } from '../src/index.js'
+import type { NotionMutationBatch } from '../src/advanced.js'
 import type { NotionServerEvent } from '../src/server.js'
 import {
   notionPage,
@@ -1205,6 +1205,47 @@ describe('createNotionSyncHandler', () => {
       code: 'page_not_found',
       retryable: false,
     })
+  })
+
+  it('treats deleting an already trashed page ID as idempotent', async () => {
+    const notion = createFakeNotion()
+    const row = testTodo({
+      id: 'trashed-row',
+      notionPageId: 'trashed-page',
+    })
+    const page = notionPage(row, 'trashed-page')
+    page.in_trash = true
+    notion.pages.set('trashed-page', page)
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      dangerouslyAllowUnauthenticated: true,
+      dangerouslyAllowEphemeralIdempotency: true,
+    })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'trashed-delete',
+          mutations: [{ type: 'delete', key: row.id, value: row }],
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    expect(
+      notion.calls.some(
+        ({ method, url, body }) =>
+          method === 'PATCH' &&
+          url.pathname === '/v1/pages/trashed-page' &&
+          body?.in_trash === true,
+      ),
+    ).toBe(false)
   })
 
   it('maps oversized rich text serialization to a non-retryable schema error', async () => {

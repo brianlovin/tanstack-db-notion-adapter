@@ -1,5 +1,6 @@
 import { notion, notionSchema } from '../src/index.js'
-import type { InferNotionOutput, NotionPageLike } from '../src/index.js'
+import type { InferNotionOutput } from '../src/index.js'
+import type { NotionPageLike } from '../src/advanced.js'
 
 export const testSchema = notionSchema({
   id: notion.id('Client ID'),

@@ -475,7 +475,6 @@ export function createNotionMutationExecutor<
       case 'delete': {
         const existing = await resolvePage(mutation, signal, prefetchedPages)
         if (existing) {
-          if (existing.in_trash) return { deletedKey: mutation.key }
           await config.requestNotion(
             `/v1/pages/${encodeURIComponent(existing.id)}`,
             {

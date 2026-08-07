@@ -700,6 +700,17 @@ export function createNotionPageContentClient<
     },
     async update(key, markdown) {
       await initialization
+      if (!records.has(key)) {
+        const collection = config.collection
+        const schema = collection?.config.schema
+        const row = schema
+          ? [...(collection?.values() ?? [])].find(
+              (value) => schema.getKey(value) === key,
+            )
+          : undefined
+        const notionPageId = row && schema?.getPageId(row)
+        if (notionPageId) await client.load(key, notionPageId)
+      }
       await exclusive(async () => {
         const current = records.get(key)
         if (!current) {

@@ -10,7 +10,7 @@ import {
   reliabilitySchema,
   type Incident,
 } from './src/reliability-schema'
-import type { NotionPageLike } from 'tanstack-db-notion-adapter'
+import type { NotionPageLike } from 'tanstack-db-notion-adapter/advanced'
 
 const app = new Hono()
 const pages = new Map<string, NotionPageLike>()

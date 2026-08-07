@@ -1,5 +1,12 @@
 # Production operations
 
+## Advanced exports
+
+The root package contains application-facing schema, collection, recovery, and
+page-content APIs. Import storage constructors, persistence state and
+coordination types, protocol types, and internal page representations from
+`tanstack-db-notion-adapter/advanced`.
+
 ## Rate limiting
 
 Pass one shared `NotionRateLimiter` to every handler using the same Notion
@@ -24,7 +31,7 @@ scaled deployments should use a shared database or serialized service.
 Configure the same `NotionInvalidationStore` and scope on the sync and webhook
 handlers. The webhook handler validates its one-time verification token when
 configured and deduplicates event IDs through the store. Browser collections
-poll only the cheap invalidation version via `invalidationPollIntervalMs`, then
+poll only the cheap invalidation version via `tuning.invalidationPollIntervalMs`, then
 refresh data when it changes. Page-content clients use the same option but
 revalidate only bodies currently watched by the UI. Keep slower periodic and
 focus revalidation as recovery because webhook delivery is not a durability

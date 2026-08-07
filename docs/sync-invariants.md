@@ -106,7 +106,8 @@ resolution.
   lease serialization, and stale-revision fencing.
 - `tests/client.test.ts`: queue/checkpoint failures, FIFO, overlays, recovery,
   migrations, quarantine, progressive pagination/offline hydration, structured
-  conflicts, blocked mutation state, and large transactions.
+  conflicts, blocked mutation state, deleted-row recreation/discard, implicit
+  content drafts, tuning, and large transactions.
 - `tests/server.test.ts`: endpoint trust boundary, request limits, Notion CRUD,
   native-row page-ID fallback and Client ID backfill, non-no-op deletes,
   select-option drift, rich-text limits, concurrent handlers, partial batches,

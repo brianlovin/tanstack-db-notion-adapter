@@ -1,13 +1,15 @@
 import { createCollection } from '@tanstack/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  createMemoryNotionStorage,
   notionCollectionOptions,
+} from '../src/index.js'
+import {
+  createMemoryNotionStorage,
   type NotionCollectionStorage,
   type NotionPersistedEnvelope,
   type NotionPersistedState,
   type NotionQuarantineRecord,
-} from '../src/index.js'
+} from '../src/advanced.js'
 import { testSchema, testTodo, type TestTodo } from './fixtures.js'
 
 afterEach(() => {
@@ -29,14 +31,16 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'visible-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage: createMemoryNotionStorage(),
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
         readOnly: true,
       }),
     )
@@ -55,12 +59,14 @@ describe('notionCollectionOptions', () => {
 
   it('omits mutation handlers for read-only collections', () => {
     const options = notionCollectionOptions({
+      tuning: {
+        pollIntervalMs: 0,
+      },
       id: 'read-only',
       endpoint: 'http://app.test/api/listening',
       schema: testSchema,
       storage: createMemoryNotionStorage(),
       readOnly: true,
-      pollIntervalMs: 0,
     })
 
     expect(options).not.toHaveProperty('onInsert')
@@ -84,14 +90,16 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'authenticated-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -139,13 +147,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'login-race-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage: createMemoryNotionStorage(),
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -174,14 +184,16 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'paused-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -221,13 +233,15 @@ describe('notionCollectionOptions', () => {
     }
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'legacy-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -276,13 +290,15 @@ describe('notionCollectionOptions', () => {
     }
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'quarantined-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -304,6 +320,50 @@ describe('notionCollectionOptions', () => {
     await collection.cleanup()
   })
 
+  it('surfaces a failed quarantined-state reset instead of silently succeeding', async () => {
+    let quarantine: NotionQuarantineRecord | null = {
+      collectionId: 'failed-quarantine-reset',
+      quarantinedAt: '2026-08-03T12:00:00.000Z',
+      reason: 'Malformed persisted state.',
+      value: {},
+    }
+    const storage: NotionCollectionStorage = {
+      kind: 'custom',
+      async load() {
+        return null
+      },
+      async save() {
+        throw new Error('The quarantine reset write failed.')
+      },
+      async clear() {},
+      async loadQuarantine() {
+        return quarantine
+      },
+      async clearQuarantine() {
+        quarantine = null
+      },
+    }
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
+        id: 'failed-quarantine-reset',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: vi.fn() as typeof fetch,
+      }),
+    )
+
+    await collection.preload()
+    await expect(
+      collection.utils.discardQuarantinedState({ acceptDataLoss: true }),
+    ).rejects.toThrow('The quarantine reset write failed.')
+    await collection.cleanup()
+  })
+
   it('hydrates cached rows while offline', async () => {
     const storage = createMemoryNotionStorage()
     const cached = testTodo({ id: 'cached-1', title: 'Available offline' })
@@ -317,13 +377,15 @@ describe('notionCollectionOptions', () => {
 
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'cached-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -342,14 +404,16 @@ describe('notionCollectionOptions', () => {
     const createTodos = () =>
       createCollection(
         notionCollectionOptions({
+          tuning: {
+            isOnline: () => false,
+            pollIntervalMs: 0,
+            coordinationStrategy: 'storage-lease',
+          },
           id: 'multi-context-todos',
           endpoint: 'http://app.test/api/todos',
           schema: testSchema,
           storage,
-          isOnline: () => false,
           fetch: vi.fn() as typeof fetch,
-          pollIntervalMs: 0,
-          coordinationStrategy: 'storage-lease',
         }),
       )
     const first = createTodos()
@@ -405,13 +469,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'versioned-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -467,13 +533,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'causal-write-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -535,13 +603,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'interleaved-write-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -622,15 +692,17 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+          fullReconciliationIntervalMs: 60 * 60_000,
+        },
         id: 'incremental-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
-        fullReconciliationIntervalMs: 60 * 60_000,
       }),
     )
 
@@ -686,15 +758,17 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+          fullReconciliationIntervalMs: 100,
+        },
         id: 'due-full-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
-        fullReconciliationIntervalMs: 100,
       }),
     )
 
@@ -728,14 +802,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pageSize: 20,
+          pollIntervalMs: 0,
+        },
         id: 'paginated-read-only',
         endpoint: 'http://app.test/api/listening',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pageSize: 20,
-        pollIntervalMs: 0,
         readOnly: true,
       }),
     )
@@ -775,14 +851,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'mutable-bootstrap',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -858,14 +936,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'durable-mutable-bootstrap',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -915,13 +995,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'atomic-refresh-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
         readOnly: true,
       }),
     )
@@ -961,14 +1043,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pageSize: 1,
+          pollIntervalMs: 0,
+        },
         id: 'progressive-read-only',
         endpoint: 'http://app.test/api/listening',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pageSize: 1,
-        pollIntervalMs: 0,
         readOnly: true,
         syncMode: 'progressive',
       }),
@@ -1001,13 +1085,15 @@ describe('notionCollectionOptions', () => {
 
     const offlineCollection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'progressive-read-only',
         endpoint: 'http://app.test/api/listening',
         schema: testSchema,
         storage,
         fetch: vi.fn() as typeof globalThis.fetch,
-        isOnline: () => false,
-        pollIntervalMs: 0,
         readOnly: true,
         syncMode: 'progressive',
       }),
@@ -1064,14 +1150,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pageSize: 1,
+          pollIntervalMs: 0,
+        },
         id: 'progressive-window-refresh',
         endpoint: 'http://app.test/api/listening',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pageSize: 1,
-        pollIntervalMs: 0,
         readOnly: true,
         syncMode: 'progressive',
       }),
@@ -1116,13 +1204,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'offline-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1169,13 +1259,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'retry-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1221,13 +1313,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'failed-attempt-checkpoint',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1287,13 +1381,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'conflict-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -1342,13 +1438,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'recover-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1423,14 +1521,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'deleted-recover-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1491,14 +1591,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'deleted-discard-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1516,7 +1618,7 @@ describe('notionCollectionOptions', () => {
     await expect(
       collection.utils.resolveDeletedMutation(failed!.id, {
         action: 'discard',
-      }),
+      } as never),
     ).rejects.toMatchObject({ code: 'data_loss_not_accepted' })
     await collection.utils.resolveDeletedMutation(failed!.id, {
       action: 'discard',
@@ -1548,13 +1650,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'discard-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1592,13 +1696,15 @@ describe('notionCollectionOptions', () => {
     }
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'failed-write-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1621,13 +1727,15 @@ describe('notionCollectionOptions', () => {
     const storage = createMemoryNotionStorage()
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'observer-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -1668,13 +1776,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'checkpoint-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1729,13 +1839,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'ordered-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1765,13 +1877,15 @@ describe('notionCollectionOptions', () => {
     const storage = createMemoryNotionStorage()
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'bulk-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -1818,14 +1932,16 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'progress-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -1898,13 +2014,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 10,
+        },
         id: 'cleanup-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => true,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 10,
       }),
     )
     await collection.preload()

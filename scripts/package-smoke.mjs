@@ -66,10 +66,11 @@ try {
   await writeFile(
     join(temporaryRoot, 'consumer.mjs'),
     `import { notion, notionCollectionOptions } from 'tanstack-db-notion-adapter'
+import { createMemoryNotionStorage } from 'tanstack-db-notion-adapter/advanced'
 import { createNotionSyncHandler } from 'tanstack-db-notion-adapter/server'
 import { useNotionPageContent, useNotionSyncState } from 'tanstack-db-notion-adapter/react'
 
-for (const [name, value] of Object.entries({ notion, notionCollectionOptions, createNotionSyncHandler, useNotionPageContent, useNotionSyncState })) {
+for (const [name, value] of Object.entries({ notion, notionCollectionOptions, createMemoryNotionStorage, createNotionSyncHandler, useNotionPageContent, useNotionSyncState })) {
   if (typeof value !== (name === 'notion' ? 'object' : 'function')) {
     throw new Error(\`Missing public export: \${name}\`)
   }
