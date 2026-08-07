@@ -306,7 +306,7 @@ controls needed to exercise the adapter behavior under test.
 - [x] Generated schema from a checked-in manifest.
 - [x] Instant optimistic CRUD and eager offline cache.
 - [x] PAT and single-source database-ID setup.
-- [ ] Surface poison outbox recovery and storage durability status in the UI.
+- [x] Surface blocked outbox recovery and storage durability status in the UI.
 - [ ] Add Playwright offline/reload coverage.
 
 ### Notes / journal (implemented proof of concept)

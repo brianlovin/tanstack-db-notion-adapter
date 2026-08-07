@@ -156,6 +156,10 @@ export interface NotionSyncState {
   storage: NotionCollectionStorage['kind']
   error: string | null
   quarantine: NotionQuarantineRecord | null
+  blockedMutation: {
+    entryId: string
+    error: NotionOutboxError
+  } | null
 }
 
 export interface NotionRemotePaginationState {
@@ -1163,6 +1167,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     storage: storage.kind,
     error: null,
     quarantine: null,
+    blockedMutation: null,
   }
 
   const setSyncState = (patch: Partial<NotionSyncState>) => {
@@ -1182,6 +1187,16 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       isOnline: online(),
       storage: storage.kind,
       quarantine,
+      blockedMutation:
+        state.outbox[0]?.lastError?.retryable === false
+          ? {
+              entryId: state.outbox[0].id,
+              error: {
+                ...state.outbox[0].lastError,
+                conflicts: [...state.outbox[0].lastError.conflicts],
+              },
+            }
+          : null,
     }
     for (const listener of listeners) {
       try {

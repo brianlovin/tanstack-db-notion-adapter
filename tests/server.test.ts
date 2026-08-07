@@ -62,7 +62,13 @@ function createFakeNotion() {
       collectKeys(body?.filter)
       const results = keys.size > 0
         ? [...pages.values()].filter(
-            (page) => keys.has(testSchema.parsePage(page).id) && !page.in_trash,
+            (page) => {
+              const property = page.properties['Client ID'] as {
+                rich_text?: Array<{ plain_text?: string }>
+              }
+              const key = property.rich_text?.[0]?.plain_text ?? ''
+              return keys.has(key) && !page.in_trash
+            },
           )
         : [...pages.values()].filter((page) => !page.in_trash)
       return Response.json({ results, has_more: false, next_cursor: null })
@@ -109,6 +115,9 @@ function createFakeNotion() {
       const updated = notionPage(
         {
           ...current,
+          id:
+            body.properties['Client ID']?.rich_text?.[0]?.text?.content ??
+            current.id,
           title:
             body.properties.Task?.title?.[0]?.text?.content ?? current.title,
           completed:
@@ -1060,6 +1069,206 @@ describe('createNotionSyncHandler', () => {
       (call) => call.url.pathname === `/v1/pages/${pageId}` && call.body?.in_trash,
     )
     expect(trashCall?.body).toEqual({ in_trash: true })
+
+    const repeatDelete = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          idempotencyKey: 'tx-4',
+          mutations: [
+            {
+              type: 'delete',
+              key: row.id,
+              value: testSchema.parsePage(notion.pages.get(pageId)!),
+            },
+          ],
+        }),
+      }),
+    )
+    expect(repeatDelete.status).toBe(200)
+  })
+
+  it('resolves and claims Notion-native rows by page ID', async () => {
+    const notion = createFakeNotion()
+    const native = testTodo({
+      id: '',
+      title: 'Native row',
+      notionPageId: 'native-page',
+    })
+    notion.pages.set('native-page', notionPage(native, 'native-page'))
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      dangerouslyAllowUnauthenticated: true,
+      dangerouslyAllowEphemeralIdempotency: true,
+    })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'native-update',
+          mutations: [
+            {
+              type: 'update',
+              key: 'native-page',
+              value: {
+                ...native,
+                id: 'native-page',
+                title: 'Claimed row',
+                notionPageId: 'native-page',
+              },
+              base: { title: 'Native row' },
+              changes: { title: 'Claimed row' },
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(200)
+    const patch = notion.calls.find(
+      ({ method, url }) =>
+        method === 'PATCH' && url.pathname === '/v1/pages/native-page',
+    )
+    expect(patch?.body.properties).toEqual({
+      'Client ID': {
+        rich_text: [{ type: 'text', text: { content: 'native-page', link: null } }],
+      },
+      Task: {
+        title: [{ type: 'text', text: { content: 'Claimed row', link: null } }],
+      },
+    })
+    expect(
+      (notion.pages.get('native-page')!.properties['Client ID'] as any)
+        .rich_text[0].plain_text,
+    ).toBe('native-page')
+  })
+
+  it('rejects deletes when no Notion page can be identified', async () => {
+    const notion = createFakeNotion()
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      dangerouslyAllowUnauthenticated: true,
+      dangerouslyAllowEphemeralIdempotency: true,
+    })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'missing-delete',
+          mutations: [
+            {
+              type: 'delete',
+              key: 'missing-row',
+              value: testTodo({ id: 'missing-row' }),
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(404)
+    expect((await response.json()).error).toMatchObject({
+      code: 'page_not_found',
+      retryable: false,
+    })
+  })
+
+  it('maps oversized rich text serialization to a non-retryable schema error', async () => {
+    const notion = createFakeNotion()
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      dangerouslyAllowUnauthenticated: true,
+      dangerouslyAllowEphemeralIdempotency: true,
+    })
+
+    const response = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'oversized-rich-text',
+          mutations: [
+            {
+              type: 'insert',
+              key: 'oversized-rich-text',
+              value: testTodo({
+                id: 'oversized-rich-text',
+                title: 'x'.repeat(2001 * 100 + 1),
+              }),
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(response.status).toBe(422)
+    expect(await response.json()).toMatchObject({
+      error: {
+        code: 'schema_validation_failed',
+        message: 'Task exceeds Notion rich text limit of 100 items',
+        retryable: false,
+      },
+    })
+  })
+
+  it('reads and updates rows with select values outside the declared options', async () => {
+    const notion = createFakeNotion()
+    const remote = testTodo({
+      id: 'drift-row',
+      title: 'Drift row',
+      priority: 'Urgent' as TestTodo['priority'],
+    })
+    notion.pages.set('drift-page', notionPage(remote, 'drift-page'))
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notion.fetch as typeof fetch,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 0,
+      dangerouslyAllowUnauthenticated: true,
+      dangerouslyAllowEphemeralIdempotency: true,
+    })
+
+    const list = await handler(new Request('http://app.test/api/todos'))
+    expect(list.status).toBe(200)
+    expect((await list.json()).rows[0].priority).toBe('Urgent')
+
+    const update = await handler(
+      new Request('http://app.test/api/todos', {
+        method: 'POST',
+        body: JSON.stringify({
+          idempotencyKey: 'drift-update',
+          mutations: [
+            {
+              type: 'update',
+              key: 'drift-row',
+              value: { ...remote, title: 'Updated drift row' },
+              base: { title: 'Drift row' },
+              changes: { title: 'Updated drift row' },
+            },
+          ],
+        }),
+      }),
+    )
+    expect(update.status).toBe(200)
   })
 
   it('coalesces a full insert batch into one duplicate lookup', async () => {

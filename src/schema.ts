@@ -216,6 +216,9 @@ type OptionalNullableStringField = NotionField<
   string | null,
   true
 >
+type OpenOption<TOptions extends readonly string[]> =
+  | TOptions[number]
+  | (string & {})
 
 const defaultAnnotations = (): NotionRichTextAnnotations => ({
   bold: false,
@@ -354,8 +357,8 @@ export const notion = {
   select<const TOptions extends readonly string[]>(
     property: NotionPropertyReferenceInput,
     options: TOptions,
-    defaultValue: TOptions[number] | null = null,
-  ): NotionField<TOptions[number] | null, TOptions[number] | null, true> {
+    defaultValue: OpenOption<TOptions> | null = null,
+  ): NotionField<OpenOption<TOptions> | null, OpenOption<TOptions> | null, true> {
     return field({
       kind: 'select',
       ...reference(property),
@@ -369,7 +372,7 @@ export const notion = {
   multiSelect<const TOptions extends readonly string[]>(
     property: NotionPropertyReferenceInput,
     options: TOptions,
-  ): NotionField<Array<TOptions[number]>, Array<TOptions[number]>, true> {
+  ): NotionField<Array<OpenOption<TOptions>>, Array<OpenOption<TOptions>>, true> {
     return field({
       kind: 'multi_select',
       ...reference(property),
@@ -438,8 +441,8 @@ export const notion = {
   status<const TOptions extends readonly string[]>(
     property: NotionPropertyReferenceInput,
     options: TOptions,
-    defaultValue: TOptions[number] | null = null,
-  ): NotionField<TOptions[number] | null, TOptions[number] | null, true> {
+    defaultValue: OpenOption<TOptions> | null = null,
+  ): NotionField<OpenOption<TOptions> | null, OpenOption<TOptions> | null, true> {
     return field({
       kind: 'status',
       ...reference(property),
@@ -918,25 +921,49 @@ function readProperty(
   }
 }
 
-function richText(content: string): Array<Record<string, unknown>> {
-  return content.length === 0
-    ? []
-    : [{ type: 'text', text: { content, link: null } }]
+function richText(
+  content: string,
+  fieldName: string,
+): Array<Record<string, unknown>> {
+  if (content.length === 0) return []
+  const codePoints = Array.from(content)
+  const chunks: Array<Record<string, unknown>> = []
+  for (let offset = 0; offset < codePoints.length; offset += 2000) {
+    chunks.push({
+      type: 'text',
+      text: {
+        content: codePoints.slice(offset, offset + 2000).join(''),
+        link: null,
+      },
+    })
+  }
+  if (chunks.length > 100) {
+    throw new NotionSchemaError(
+      `${fieldName} exceeds Notion rich text limit of 100 items`,
+      [{ message: 'Notion rich text is limited to 100 items.', path: [fieldName] }],
+    )
+  }
+  return chunks
 }
 
 function writeRichTextItems(
   items: Array<NotionRichTextItem>,
+  fieldName: string,
 ): Array<Record<string, unknown>> {
-  return items.map((item) => {
+  const output = items.flatMap((item) => {
     const base: Record<string, unknown> = {
       type: item.type,
       annotations: { ...item.annotations },
     }
     if (item.type === 'text') {
-      base.text = {
-        content: item.text?.content ?? item.plainText,
-        link: item.text?.link ? { ...item.text.link } : null,
-      }
+      const content = item.text?.content ?? item.plainText
+      return richText(content, fieldName).map((chunk) => ({
+        ...base,
+        text: {
+          ...(chunk.text as Record<string, unknown>),
+          link: item.text?.link ? { ...item.text.link } : null,
+        },
+      }))
     } else if (item.type === 'mention') {
       base.mention = structuredClone(item.mention ?? {})
     } else if (item.type === 'equation') {
@@ -944,30 +971,44 @@ function writeRichTextItems(
         expression: item.equation?.expression ?? item.plainText,
       }
     }
-    return base
+    return [base]
   })
+  if (output.length > 100) {
+    throw new NotionSchemaError(
+      `${fieldName} exceeds Notion rich text limit of 100 items`,
+      [{ message: 'Notion rich text is limited to 100 items.', path: [fieldName] }],
+    )
+  }
+  return output
 }
 
 function writeProperty(
   descriptor: NotionField<unknown, unknown, boolean>,
   value: unknown,
+  fieldName: string,
 ): NotionPropertyValue | undefined {
   switch (descriptor.kind as NotionWritableFieldKind) {
     case 'id':
-      return { rich_text: richText(value as string) }
+      return { rich_text: richText(value as string, fieldName) }
     case 'rich_text':
       return {
         rich_text:
           descriptor.representation === 'rich_text_items'
-            ? writeRichTextItems(value as Array<NotionRichTextItem>)
-            : richText(value as string),
+            ? writeRichTextItems(
+                value as Array<NotionRichTextItem>,
+                fieldName,
+              )
+            : richText(value as string, fieldName),
       }
     case 'title':
       return {
         title:
           descriptor.representation === 'rich_text_items'
-            ? writeRichTextItems(value as Array<NotionRichTextItem>)
-            : richText(value as string),
+            ? writeRichTextItems(
+                value as Array<NotionRichTextItem>,
+                fieldName,
+              )
+            : richText(value as string, fieldName),
       }
     case 'checkbox':
       return { checkbox: value }
@@ -1035,17 +1076,16 @@ function validateField(
     case 'select':
     case 'status':
       return value === null ||
-        (typeof value === 'string' && descriptor.options?.includes(value))
+        typeof value === 'string'
         ? undefined
-        : issue(`one of ${descriptor.options?.join(', ') ?? 'the configured options'}`)
+        : issue('a string or null')
     case 'multi_select':
       return Array.isArray(value) &&
         value.every(
-          (item) =>
-            typeof item === 'string' && descriptor.options?.includes(item),
+          (item) => typeof item === 'string',
         )
         ? undefined
-        : issue('an array of configured options')
+        : issue('an array of strings')
     case 'title':
     case 'rich_text':
       if (descriptor.representation === 'rich_text_items') {
@@ -1245,7 +1285,7 @@ export function notionSchema<const TFields extends NotionFields>(
         ) {
           continue
         }
-        const property = writeProperty(descriptor, row[key])
+        const property = writeProperty(descriptor, row[key], descriptor.name)
         if (property) {
           properties[descriptor.propertyId ?? descriptor.name] = property
         }

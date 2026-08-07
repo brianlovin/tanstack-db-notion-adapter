@@ -22,6 +22,7 @@ describe('React bindings', () => {
       storage: 'indexeddb',
       error: null,
       quarantine: null,
+      blockedMutation: null,
     }
     const collection = {
       utils: {

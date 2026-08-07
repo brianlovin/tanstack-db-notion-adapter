@@ -132,6 +132,14 @@ function isPage(value: unknown): value is NotionPageLike {
   )
 }
 
+function looksLikePageId(value: string): boolean {
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      value,
+    ) || /^[0-9a-f]{32}$/i.test(value)
+  )
+}
+
 interface NotionListResponse {
   results?: Array<unknown>
   has_more?: boolean
@@ -165,6 +173,33 @@ export function createNotionMutationExecutor<
   const idDescriptor = config.schema.fields[config.schema.idField]!
   const idPropertyName = idDescriptor.name ?? null
   const idPropertyReference = idDescriptor.propertyId ?? idPropertyName
+
+  function hasClientId(page: NotionPageLike): boolean {
+    for (const [name, value] of Object.entries(page.properties)) {
+      if (!value || typeof value !== 'object') continue
+      const property = value as Record<string, unknown>
+      if (name !== idPropertyName && property.id !== idPropertyReference) {
+        continue
+      }
+      const richText = Array.isArray(property.rich_text)
+        ? property.rich_text
+        : []
+      return richText.some((item) => {
+        if (!item || typeof item !== 'object') return false
+        const record = item as Record<string, unknown>
+        return (
+          (typeof record.plain_text === 'string' && record.plain_text.length > 0) ||
+          (typeof record.text === 'object' &&
+            record.text !== null &&
+            typeof (record.text as Record<string, unknown>).content ===
+              'string' &&
+            ((record.text as Record<string, unknown>).content as string)
+              .length > 0)
+        )
+      })
+    }
+    return false
+  }
 
   async function findPagesByKeys(
     keys: ReadonlyArray<string>,
@@ -246,30 +281,48 @@ export function createNotionMutationExecutor<
           retryable: false,
         })
       }
-      return page
+      if (page) return page
     }
 
-    const pageId = config.schema.getPageId(mutation.value)
-    if (pageId) {
-      const page = await config.requestNotion<unknown>(
+    const pageId =
+      config.schema.getPageId(mutation.value) ??
+      (looksLikePageId(mutation.key) ? mutation.key : null)
+    if (!pageId) return null
+    let page: unknown
+    try {
+      page = await config.requestNotion<unknown>(
         `/v1/pages/${encodeURIComponent(pageId)}`,
         signal ? { signal } : {},
       )
-      if (!isPage(page)) return null
-      if (
-        page.parent?.type !== 'data_source_id' ||
-        page.parent.data_source_id !== config.dataSourceId
-      ) {
-        throw new NotionHttpError({
-          status: 404,
-          code: 'page_outside_data_source',
-          message: 'The requested page is not part of this data source.',
-          retryable: false,
-        })
+    } catch (error) {
+      if (error instanceof NotionHttpError && error.status === 404) {
+        return null
       }
-      return page
+      throw error
     }
-    return null
+    if (!isPage(page)) return null
+    if (
+      page.parent?.type !== 'data_source_id' ||
+      page.parent.data_source_id !== config.dataSourceId
+    ) {
+      throw new NotionHttpError({
+        status: 404,
+        code: 'page_outside_data_source',
+        message: 'The requested page is not part of this data source.',
+        retryable: false,
+      })
+    }
+    if (
+      config.schema.getKey(config.schema.parsePage(page)) !== mutation.key
+    ) {
+      throw new NotionHttpError({
+        status: 409,
+        code: 'page_identity_mismatch',
+        message: 'The row key and Notion page ID identify different pages.',
+        retryable: false,
+      })
+    }
+    return page
   }
 
   async function updatePage(
@@ -277,13 +330,20 @@ export function createNotionMutationExecutor<
     value: TItem,
     signal?: AbortSignal,
     selectedFields?: ReadonlySet<keyof TFields & string>,
+    backfillIdentity = false,
   ): Promise<TItem> {
+    const fields = selectedFields
+      ? new Set(selectedFields)
+      : backfillIdentity
+        ? new Set([config.schema.idField])
+        : undefined
+    if (backfillIdentity && fields) fields.add(config.schema.idField)
     const updated = await config.requestNotion<unknown>(
       `/v1/pages/${encodeURIComponent(pageId)}`,
       {
         method: 'PATCH',
         body: JSON.stringify({
-          properties: config.schema.serialize(value, selectedFields),
+          properties: config.schema.serialize(value, fields),
         }),
         ...(signal ? { signal } : {}),
       },
@@ -402,12 +462,19 @@ export function createNotionMutationExecutor<
         }
         if (pending.size === 0) return { row: remote }
         return {
-          row: await updatePage(existing.id, mutation.value, signal, pending),
+          row: await updatePage(
+            existing.id,
+            mutation.value,
+            signal,
+            pending,
+            !hasClientId(existing),
+          ),
         }
       }
       case 'delete': {
         const existing = await resolvePage(mutation, signal, prefetchedPages)
         if (existing) {
+          if (existing.in_trash) return { deletedKey: mutation.key }
           await config.requestNotion(
             `/v1/pages/${encodeURIComponent(existing.id)}`,
             {
@@ -416,6 +483,16 @@ export function createNotionMutationExecutor<
               ...(signal ? { signal } : {}),
             },
           )
+        } else if (
+          !config.schema.getPageId(mutation.value) &&
+          !looksLikePageId(mutation.key)
+        ) {
+          throw new NotionHttpError({
+            status: 404,
+            code: 'page_not_found',
+            message: 'No Notion page was found for the requested row.',
+            retryable: false,
+          })
         }
         return { deletedKey: mutation.key }
       }

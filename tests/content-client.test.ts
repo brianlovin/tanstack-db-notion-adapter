@@ -106,6 +106,108 @@ describe('createNotionPageContentClient', () => {
     client.cleanup()
   })
 
+  it('reloads and reapplies a draft after a storage revision conflict', async () => {
+    const storage = createMemoryNotionStorage()
+    const fetch = vi.fn(async () => Response.json(content('Original')))
+    const first = createNotionPageContentClient({
+      id: 'revision-conflict-content',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: fetch as typeof globalThis.fetch,
+      debounceMs: 60_000,
+      autoStart: false,
+    })
+    const second = createNotionPageContentClient({
+      id: 'revision-conflict-content',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: fetch as typeof globalThis.fetch,
+      debounceMs: 60_000,
+      autoStart: false,
+    })
+
+    await first.load('note-1', 'page-1')
+    await second.load('note-1', 'page-1')
+    await first.update('note-1', 'First tab draft')
+    await second.update('note-1', 'Second tab draft')
+
+    expect(second.get('note-1')).toMatchObject({
+      markdown: 'Second tab draft',
+      pending: true,
+      status: 'saved-local',
+    })
+    const persisted = await storage.load<NotionPageContentSnapshot>(
+      'revision-conflict-content:page-content',
+    )
+    expect(persisted?.rows[0]).toMatchObject({
+      markdown: 'Second tab draft',
+      pending: true,
+    })
+
+    first.cleanup()
+    second.cleanup()
+  })
+
+  it('keeps the local draft visible when every CAS retry fails', async () => {
+    const backing = createMemoryNotionStorage()
+    await backing.save<NotionPageContentSnapshot>(
+      'persistent-cas-failure:page-content',
+      {
+        version: 2,
+        revision: 1,
+        outbox: [],
+        rows: [
+          {
+            key: 'note-1',
+            notionPageId: 'page-1',
+            markdown: 'Original',
+            baseMarkdown: 'Original',
+            remoteMarkdown: null,
+            revision: 0,
+            pending: false,
+            truncated: false,
+            unknownBlockIds: [],
+            status: 'synced',
+            lastSyncedAt: null,
+            error: null,
+          },
+        ],
+        lastSyncedAt: null,
+      },
+    )
+    const storage = {
+      ...backing,
+      compareAndSet: async () => false,
+    }
+    const client = createNotionPageContentClient({
+      id: 'persistent-cas-failure',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: vi.fn(async () => Response.json(content('Original'))) as typeof globalThis.fetch,
+      debounceMs: 60_000,
+      autoStart: false,
+    })
+    await client.ready()
+    let notifications = 0
+    const unsubscribe = client.subscribe(() => {
+      notifications += 1
+    })
+
+    await expect(client.update('note-1', 'Local draft')).rejects.toMatchObject({
+      code: 'storage_revision_conflict',
+    })
+
+    expect(client.get('note-1')).toMatchObject({
+      markdown: 'Local draft',
+      pending: true,
+      status: 'saved-local',
+    })
+    expect(notifications).toBeGreaterThan(0)
+
+    unsubscribe()
+    client.cleanup()
+  })
+
   it('coalesces edits made while a content write is in flight', async () => {
     const storage = createMemoryNotionStorage()
     let resolveFirstWrite!: (response: Response) => void
