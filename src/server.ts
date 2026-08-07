@@ -589,6 +589,15 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
   type TItem = InferNotionOutput<TFields>
 
   if (!config.token) throw new Error('A Notion token is required.')
+  if (
+    typeof process !== 'undefined' &&
+    process.env.NODE_ENV === 'production' &&
+    config.dangerouslyAllowUnauthenticated === true
+  ) {
+    throw new Error(
+      'dangerouslyAllowUnauthenticated cannot be used in production; provide authorize instead.',
+    )
+  }
   const dataSourceId = config.dataSourceId ?? config.schema.dataSourceId
   if (!dataSourceId) {
     throw new Error(

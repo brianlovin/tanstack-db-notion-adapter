@@ -301,6 +301,7 @@ export function createNotionMutationExecutor<
       throw error
     }
     if (!isPage(page)) return null
+    if (page.in_trash) return null
     if (
       page.parent?.type !== 'data_source_id' ||
       page.parent.data_source_id !== config.dataSourceId

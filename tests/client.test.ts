@@ -8,7 +8,7 @@ import {
   type NotionPersistedState,
   type NotionQuarantineRecord,
 } from '../src/index.js'
-import { testSchema, testTodo } from './fixtures.js'
+import { testSchema, testTodo, type TestTodo } from './fixtures.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
@@ -1379,6 +1379,152 @@ describe('notionCollectionOptions', () => {
     expect(await collection.utils.getPendingMutations()).toHaveLength(0)
     expect(collection.utils.getSyncState().blockedMutation).toBeNull()
     expect(collection.get('recover-1')?.notionPageId).toBe('page-recover-1')
+    await collection.cleanup()
+  })
+
+  it('recreates a remotely deleted row from a blocked local update', async () => {
+    const storage = createMemoryNotionStorage()
+    let recreate = false
+    let remoteTitle = 'Before deletion'
+    const remote = testTodo({
+      id: 'deleted-recover-1',
+      title: 'Before deletion',
+      notionPageId: 'page-deleted-recover-1',
+    })
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST' && !recreate) {
+        return Response.json(
+          {
+            error: {
+              code: 'page_not_found',
+              message: 'The Notion page could not be found.',
+              retryable: false,
+            },
+          },
+          { status: 404 },
+        )
+      }
+      if (init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as {
+          mutations: Array<{ type: string; value: TestTodo }>
+        }
+        expect(body.mutations[0]?.type).toBe('insert')
+        remoteTitle = body.mutations[0]!.value.title
+        return Response.json({
+          rows: [{ ...remote, title: remoteTitle }],
+          deletedKeys: [],
+        })
+      }
+      return Response.json({
+        rows: [{ ...remote, title: remoteTitle }],
+        hasMore: false,
+        nextCursor: null,
+      })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'deleted-recover-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        autoStart: false,
+        pollIntervalMs: 0,
+      }),
+    )
+
+    await collection.preload()
+    await collection.utils.syncNow()
+    const transaction = collection.update('deleted-recover-1', (draft) => {
+      draft.title = 'Recreated locally'
+    })
+    await transaction.isPersisted.promise
+    await expect(collection.utils.syncNow()).rejects.toMatchObject({
+      code: 'page_not_found',
+    })
+    const [failed] = await collection.utils.getPendingMutations()
+    expect(collection.utils.getSyncState().blockedMutation).toMatchObject({
+      entryId: failed!.id,
+      error: { code: 'page_not_found', status: 404 },
+    })
+
+    recreate = true
+    await collection.utils.resolveDeletedMutation(failed!.id, {
+      action: 'recreate',
+    })
+
+    expect(await collection.utils.getPendingMutations()).toHaveLength(0)
+    expect(collection.get('deleted-recover-1')?.title).toBe('Recreated locally')
+    expect(collection.get('deleted-recover-1')?.notionPageId).toBe(
+      'page-deleted-recover-1',
+    )
+    await collection.cleanup()
+  })
+
+  it('drops a remotely deleted row only with explicit data-loss acknowledgement', async () => {
+    const storage = createMemoryNotionStorage()
+    let initialPull = true
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Response.json(
+          {
+            error: {
+              code: 'page_not_found',
+              message: 'The Notion page could not be found.',
+              retryable: false,
+            },
+          },
+          { status: 404 },
+        )
+      }
+      const rows = initialPull
+        ? [
+            testTodo({
+              id: 'deleted-discard-1',
+              notionPageId: 'page-deleted-discard-1',
+            }),
+          ]
+        : []
+      initialPull = false
+      return Response.json({ rows, hasMore: false, nextCursor: null })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'deleted-discard-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => true,
+        autoStart: false,
+        pollIntervalMs: 0,
+      }),
+    )
+
+    await collection.preload()
+    await collection.utils.syncNow()
+    const transaction = collection.update('deleted-discard-1', (draft) => {
+      draft.title = 'Discard this edit'
+    })
+    await transaction.isPersisted.promise
+    await expect(collection.utils.syncNow()).rejects.toMatchObject({
+      code: 'page_not_found',
+    })
+    const [failed] = await collection.utils.getPendingMutations()
+
+    await expect(
+      collection.utils.resolveDeletedMutation(failed!.id, {
+        action: 'discard',
+      }),
+    ).rejects.toMatchObject({ code: 'data_loss_not_accepted' })
+    await collection.utils.resolveDeletedMutation(failed!.id, {
+      action: 'discard',
+      acceptDataLoss: true,
+    })
+
+    expect(collection.get('deleted-discard-1')).toBeUndefined()
+    expect(await collection.utils.getPendingMutations()).toHaveLength(0)
     await collection.cleanup()
   })
 

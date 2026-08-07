@@ -1,9 +1,12 @@
 import {
   createBrowserSyncLifecycle,
   createJsonRequester,
-  createSerializedQueue,
   NotionSyncError,
 } from './browser-sync-runtime.js'
+import {
+  createNotionPersistedStateStore,
+  createSerializedQueue,
+} from './persisted-state.js'
 import {
   createBrowserNotionStorage,
   type NotionCollectionStorage,
@@ -149,6 +152,9 @@ export function createNotionPageContentClient<
 
   const endpoint = config.endpoint.replace(/\/$/, '')
   const storageId = `${config.id}:page-content`
+  const persistence = createNotionPersistedStateStore<
+    NotionPageContentSnapshot
+  >(storage, storageId)
   const debounceMs = Math.max(0, config.debounceMs ?? 750)
   const requestTimeoutMs = Math.max(1, config.requestTimeoutMs ?? 30_000)
   const pollIntervalMs = Math.max(0, config.pollIntervalMs ?? 60_000)
@@ -168,7 +174,6 @@ export function createNotionPageContentClient<
   let records = new Map<string, NotionPageContentSnapshot>()
   let disposed = false
   let syncEnabled = config.autoStart !== false
-  let storageRevision = 0
   const lifecycle = createBrowserSyncLifecycle({
     ...(config.isOnline ? { isOnline: config.isOnline } : {}),
     ...(config.refreshOnWindowFocus === undefined
@@ -207,7 +212,8 @@ export function createNotionPageContentClient<
     const previous = records
     let desired = next
     try {
-      for (let attempt = 0; attempt < 5; attempt += 1) {
+      await persistence.compareAndSetWithRetry(
+        () => {
         const lastSyncedAt = [...desired.values()].reduce<number | null>(
           (latest, record) =>
             record.lastSyncedAt !== null &&
@@ -218,45 +224,39 @@ export function createNotionPageContentClient<
         )
         const state: NotionPersistedState<NotionPageContentSnapshot> = {
           ...emptyPersistedState(),
-          revision: storageRevision + 1,
+          revision: persistence.revision + 1,
           rows: [...desired.values()],
           lastSyncedAt,
         }
-        const saved = storage.compareAndSet
-          ? await storage.compareAndSet(storageId, storageRevision, state)
-          : await storage.save(storageId, state).then(() => true)
-        if (saved) {
-          storageRevision = state.revision
-          records = desired
-          notify()
-          return
-        }
-
-        const persisted = await storage.load<NotionPageContentSnapshot>(storageId)
-        storageRevision =
-          persisted?.version === 2 ? persisted.revision : 0
-        const reloaded = new Map<string, NotionPageContentSnapshot>()
-        for (const value of persisted?.rows ?? []) {
-          if (isSnapshot(value)) reloaded.set(value.key, value)
-        }
-        const merged = new Map(reloaded)
-        for (const [key, value] of previous) {
-          const local = desired.get(key)
-          if (JSON.stringify(local) === JSON.stringify(value)) continue
-          if (local === undefined) merged.delete(key)
-          else merged.set(key, local)
-        }
-        for (const [key, local] of desired) {
-          if (previous.has(key)) continue
-          merged.set(key, local)
-        }
-        records = merged
-        desired = merged
-      }
-      throw new NotionSyncError({
-        code: 'storage_revision_conflict',
-        message: 'Another tab saved a newer page-content draft.',
-      })
+          return state
+        },
+        async (persisted) => {
+          const reloaded = new Map<string, NotionPageContentSnapshot>()
+          for (const value of persisted?.rows ?? []) {
+            if (isSnapshot(value)) reloaded.set(value.key, value)
+          }
+          const merged = new Map(reloaded)
+          for (const [key, value] of previous) {
+            const local = desired.get(key)
+            if (JSON.stringify(local) === JSON.stringify(value)) continue
+            if (local === undefined) merged.delete(key)
+            else merged.set(key, local)
+          }
+          for (const [key, local] of desired) {
+            if (previous.has(key)) continue
+            merged.set(key, local)
+          }
+          records = merged
+          desired = merged
+        },
+        () =>
+          new NotionSyncError({
+            code: 'storage_revision_conflict',
+            message: 'Another tab saved a newer page-content draft.',
+          }),
+      )
+      records = desired
+      notify()
     } catch (error) {
       records = desired
       notify()
@@ -265,9 +265,8 @@ export function createNotionPageContentClient<
   }
 
   const initialization = (async () => {
-    const persisted = await storage.load<NotionPageContentSnapshot>(storageId)
+    const persisted = await persistence.reload()
     if (disposed || !persisted) return
-    storageRevision = persisted.version === 2 ? persisted.revision : 0
     const next = new Map<string, NotionPageContentSnapshot>()
     for (const value of persisted.rows) {
       if (!isSnapshot(value)) {

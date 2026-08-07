@@ -143,6 +143,27 @@ function createFakeNotion() {
 }
 
 describe('createNotionSyncHandler', () => {
+  it('rejects the unauthenticated escape hatch in production', () => {
+    const previousNodeEnv = process.env.NODE_ENV
+    process.env.NODE_ENV = 'production'
+    try {
+      expect(() =>
+        createNotionSyncHandler({
+          token: 'secret',
+          dataSourceId: 'source-1',
+          schema: testSchema,
+          dangerouslyAllowUnauthenticated: true,
+          dangerouslyAllowEphemeralIdempotency: true,
+        }),
+      ).toThrow(
+        'dangerouslyAllowUnauthenticated cannot be used in production; provide authorize instead.',
+      )
+    } finally {
+      if (previousNodeEnv === undefined) delete process.env.NODE_ENV
+      else process.env.NODE_ENV = previousNodeEnv
+    }
+  })
+
   it('uses the data source ID embedded in a generated schema', async () => {
     const notionApi = createFakeNotion()
     const schema = notionSchema(testSchema.fields, { dataSourceId: 'source-1' })

@@ -10,9 +10,14 @@ import type {
 import {
   createBrowserSyncLifecycle,
   createJsonRequester,
-  createSerializedQueue,
   NotionSyncError,
 } from './browser-sync-runtime.js'
+import {
+  createNotionPersistedStateStore,
+  createSerializedQueue,
+  NotionPersistedStateError,
+} from './persisted-state.js'
+export { NotionPersistedStateError } from './persisted-state.js'
 import type {
   NotionInvalidationVersion,
   NotionListResult,
@@ -186,6 +191,12 @@ export interface NotionCollectionUtils<TItem extends object> extends UtilsRecord
     entryId: string,
     options: { acceptDataLoss: true },
   ) => Promise<void>
+  resolveDeletedMutation: (
+    entryId: string,
+    options:
+      | { action: 'recreate' }
+      | { action: 'discard'; acceptDataLoss?: true },
+  ) => Promise<void>
   getQuarantinedState: () => Promise<NotionQuarantineRecord | null>
   discardQuarantinedState: (options: { acceptDataLoss: true }) => Promise<void>
   resetLocalCache: () => Promise<void>
@@ -242,15 +253,6 @@ export interface NotionCollectionConfig<TFields extends NotionFields>
    * @default true
    */
   autoStart?: boolean
-}
-
-export class NotionPersistedStateError extends Error {
-  readonly code = 'persisted_state_quarantined'
-
-  constructor(message: string) {
-    super(message)
-    this.name = 'NotionPersistedStateError'
-  }
 }
 
 export class NotionStorageConflictError extends Error {
@@ -1105,6 +1107,10 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   type SyncParams = Parameters<SyncConfig<TItem, string>['sync']>[0]
 
   const storage = config.storage ?? createBrowserNotionStorage()
+  const persistence = createNotionPersistedStateStore<TItem>(
+    storage,
+    config.id,
+  )
   const fetcher = config.fetch ?? globalThis.fetch
   if (!fetcher) throw new Error('A fetch implementation is required.')
   if (config.syncMode === 'progressive' && !config.readOnly) {
@@ -1313,9 +1319,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     state.rows = [...validRows.values()]
     if (migrated.migrated) {
       const nextState = { ...state, revision: state.revision + 1 }
-      const saved = storage.compareAndSet
-        ? await storage.compareAndSet(config.id, state.revision, nextState)
-        : await storage.save(config.id, nextState).then(() => true)
+      const saved = await persistence.compareAndSet(nextState)
       if (!saved) throw new NotionStorageConflictError()
       state = nextState
     }
@@ -1323,11 +1327,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   }
 
   const reload = async () => {
-    quarantine = (await storage.loadQuarantine?.(config.id)) ?? null
-    if (quarantine) {
-      throw new NotionPersistedStateError(quarantine.reason)
-    }
-    const persisted = await storage.load<TItem>(config.id)
+    const persisted = await persistence.reload()
     try {
       await hydratePersistedState(persisted)
     } catch (error) {
@@ -1360,9 +1360,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   ) => {
     if (disposed) throw lifecycle.signal.reason
     const committed = { ...nextState, version: 2 as const, revision: state.revision + 1 }
-    const saved = storage.compareAndSet
-      ? await storage.compareAndSet(config.id, state.revision, committed)
-      : await storage.save(config.id, committed).then(() => true)
+    const saved = await persistence.compareAndSet(committed)
     if (!saved) throw new NotionStorageConflictError()
     state = committed
     if (nextRows) applyRows(nextRows)
@@ -1987,6 +1985,103 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       )
       await synchronize('full')
     },
+    async resolveDeletedMutation(entryId, options) {
+      await initialization
+      if (options.action === 'discard' && options.acceptDataLoss !== true) {
+        throw new NotionSyncError({
+          code: 'data_loss_not_accepted',
+          message:
+            'Discarding a remotely deleted row requires acceptDataLoss: true.',
+          retryable: false,
+        })
+      }
+      if (!online()) {
+        throw new NotionSyncError({
+          code: 'discard_requires_online',
+          message: 'Reconnect before resolving a remotely deleted row.',
+          retryable: true,
+        })
+      }
+      await exclusive(() =>
+        crossTab(async () => {
+          await reload()
+          const index = state.outbox.findIndex((entry) => entry.id === entryId)
+          if (index < 0) {
+            throw new NotionSyncError({
+              code: 'outbox_entry_not_found',
+              message: 'The pending mutation no longer exists.',
+              retryable: false,
+            })
+          }
+          if (index !== 0) {
+            throw new NotionSyncError({
+              code: 'deleted_mutation_not_resolvable',
+              message: 'Only the blocked head mutation can be resolved.',
+              retryable: false,
+            })
+          }
+          const entry = state.outbox[index]!
+          if (entry.lastError?.code !== 'page_not_found') {
+            throw new NotionSyncError({
+              code: 'deleted_mutation_not_resolvable',
+              message:
+                'Only a pending mutation blocked by page_not_found can be resolved this way.',
+              retryable: false,
+            })
+          }
+          const mutation = entry.batch.mutations[0]
+          if (entry.batch.mutations.length !== 1) {
+            throw new NotionSyncError({
+              code: 'deleted_mutation_not_resolvable',
+              message:
+                'Only a single pending row mutation can be resolved after deletion.',
+              retryable: false,
+            })
+          }
+          const outbox = [...state.outbox]
+          if (options.action === 'recreate') {
+            const update = mutation
+            if (!update || update.type !== 'update') {
+              throw new NotionSyncError({
+                code: 'deleted_mutation_not_resolvable',
+                message:
+                  'Only a single pending row update can be recreated after deletion.',
+                retryable: false,
+              })
+            }
+            outbox[index] = {
+              ...entry,
+              attempts: 0,
+              lastAttemptAt: null,
+              lastError: null,
+              batch: {
+                ...entry.batch,
+                idempotencyKey: randomInstanceId(),
+                mutations: [
+                  {
+                    type: 'insert',
+                    key: update.key,
+                    value: update.value,
+                  },
+                ],
+              },
+            }
+            await persistStateOnly({ ...state, outbox })
+            return
+          }
+          const key = mutation?.key
+          const rows =
+            key === undefined
+              ? state.rows
+              : state.rows.filter((row) => config.schema.getKey(row) !== key)
+          outbox.splice(index, 1)
+          await commitState({ ...state, rows, outbox }, new Map(
+            rows.map((row) => [config.schema.getKey(row), row]),
+          ))
+        }),
+      )
+      await synchronize('full')
+    },
     async getQuarantinedState() {
       await initialization
       quarantine = (await storage.loadQuarantine?.(config.id)) ?? quarantine
@@ -2012,7 +2107,10 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
         await storage.clearQuarantine!(config.id)
         quarantine = null
         state = emptyState<TItem>()
-        await storage.save(config.id, state)
+        await persistence.compareAndSet({
+          ...state,
+          revision: state.revision + 1,
+        })
         applyRows(new Map())
         setSyncState({
           status: online() ? 'idle' : 'offline',
