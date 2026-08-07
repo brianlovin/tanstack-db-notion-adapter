@@ -8,6 +8,7 @@
     ".": {
       "entry": [
         "src/index.ts",
+        "src/advanced.ts",
         "src/server.ts",
         "src/schema-tools.ts",
         "src/cli.ts",

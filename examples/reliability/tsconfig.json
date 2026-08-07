@@ -5,6 +5,7 @@
     "jsx": "react-jsx",
     "paths": {
       "tanstack-db-notion-adapter": ["src/index.ts"],
+      "tanstack-db-notion-adapter/advanced": ["src/advanced.ts"],
       "tanstack-db-notion-adapter/server": ["src/server.ts"]
     },
     "types": ["node", "vite/client"],

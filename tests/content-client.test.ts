@@ -1,12 +1,14 @@
 import { createCollection } from '@tanstack/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  createMemoryNotionStorage,
   createNotionPageContentClient,
   notionCollectionOptions,
-  type NotionPageContent,
   type NotionPageContentSnapshot,
 } from '../src/index.js'
+import {
+  createMemoryNotionStorage,
+  type NotionPageContent,
+} from '../src/advanced.js'
 import { testSchema, testTodo } from './fixtures.js'
 
 function content(markdown: string): NotionPageContent {
@@ -24,6 +26,67 @@ afterEach(() => {
 })
 
 describe('createNotionPageContentClient', () => {
+  it('binds the default global fetch before loading page content', async () => {
+    const fetch = vi.fn(function (
+      this: typeof globalThis,
+      _input: string | URL | Request,
+    ) {
+      if (this !== globalThis) {
+        throw new TypeError('Illegal invocation')
+      }
+      return Promise.resolve(Response.json(content('Loaded content')))
+    })
+    vi.stubGlobal('fetch', fetch)
+    const client = createNotionPageContentClient({
+      id: 'default-fetch-content',
+      endpoint: 'http://app.test/api/notes',
+      storage: createMemoryNotionStorage(),
+      autoStart: false,
+      pollIntervalMs: 0,
+    })
+
+    await client.load('note-1', 'page-1')
+
+    expect(client.get('note-1')?.markdown).toBe('Loaded content')
+    expect(fetch).toHaveBeenCalled()
+    client.cleanup()
+  })
+
+  it('creates a draft when updating a known collection row without createDraft', async () => {
+    const row = testTodo({
+      id: 'implicit-draft',
+      notionPageId: 'page-implicit-draft',
+    })
+    const collection = {
+      config: {
+        schema: {
+          getKey: (value: typeof row) => value.id,
+          getPageId: (value: typeof row) => value.notionPageId,
+        },
+      },
+      values: () => [row].values(),
+      subscribeChanges: () => ({ unsubscribe() {} }),
+    }
+    const client = createNotionPageContentClient({
+      id: 'implicit-draft',
+      endpoint: 'http://app.test/api/notes',
+      collection,
+      storage: createMemoryNotionStorage(),
+      fetch: vi.fn(async () => Response.json(content('Original'))) as typeof fetch,
+      autoStart: false,
+      pollIntervalMs: 0,
+    })
+
+    await client.update('implicit-draft', 'Draft without setup')
+
+    expect(client.get('implicit-draft')).toMatchObject({
+      markdown: 'Draft without setup',
+      pending: true,
+      notionPageId: 'page-implicit-draft',
+    })
+    client.cleanup()
+  })
+
   it('aborts page-content requests at the configured timeout', async () => {
     vi.useFakeTimers()
     const fetch = vi.fn(
@@ -462,13 +525,15 @@ describe('createNotionPageContentClient', () => {
     const createRows = () =>
       createCollection(
         notionCollectionOptions({
+          tuning: {
+            isOnline: () => isOnline,
+            pollIntervalMs: 0,
+          },
           id: 'offline-note-rows',
           endpoint: 'http://app.test/api/notes',
           schema: testSchema,
           storage,
           fetch: fetch as typeof globalThis.fetch,
-          isOnline: () => isOnline,
-          pollIntervalMs: 0,
         }),
       )
     const createContent = (collection: ReturnType<typeof createRows>) =>

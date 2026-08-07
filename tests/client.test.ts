@@ -1,20 +1,169 @@
 import { createCollection } from '@tanstack/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  createMemoryNotionStorage,
   notionCollectionOptions,
+} from '../src/index.js'
+import {
+  createNotionSyncHandler,
+} from '../src/server.js'
+import {
+  createMemoryNotionStorage,
   type NotionCollectionStorage,
   type NotionPersistedEnvelope,
   type NotionPersistedState,
   type NotionQuarantineRecord,
-} from '../src/index.js'
-import { testSchema, testTodo } from './fixtures.js'
+} from '../src/advanced.js'
+import {
+  notionPage,
+  notionProperties,
+  testSchema,
+  testTodo,
+  type TestTodo,
+} from './fixtures.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
 describe('notionCollectionOptions', () => {
+  it('recreates a deleted row through the server without reusing insert idempotency', async () => {
+    const pages = new Map<string, ReturnType<typeof notionPage>>()
+    let created = 0
+    const notionFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const requestUrl = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      const method = init?.method ?? 'GET'
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      if (method === 'GET' && requestUrl.pathname === '/v1/data_sources/source-1') {
+        return Response.json({ object: 'data_source', properties: notionProperties })
+      }
+      if (method === 'POST' && requestUrl.pathname.endsWith('/query')) {
+        return Response.json({
+          results: [...pages.values()].filter((candidate) => !candidate.in_trash),
+          has_more: false,
+          next_cursor: null,
+        })
+      }
+      if (method === 'GET' && requestUrl.pathname.startsWith('/v1/pages/')) {
+        const found = pages.get(requestUrl.pathname.split('/').pop()!)
+        return found
+          ? Response.json(found)
+          : Response.json({ code: 'object_not_found' }, { status: 404 })
+      }
+      if (method === 'POST' && requestUrl.pathname === '/v1/pages') {
+        created += 1
+        const pageId = `page-handler-recreated-${created}`
+        const properties = body.properties
+        const recreated = notionPage(
+          testTodo({
+            id: properties['Client ID'].rich_text[0].text.content,
+            title: properties.Task.title[0].text.content,
+            notionPageId: pageId,
+          }),
+          pageId,
+        )
+        pages.set(pageId, recreated)
+        return Response.json(recreated)
+      }
+      return Response.json({ code: 'unhandled' }, { status: 500 })
+    })
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notionFetch as typeof globalThis.fetch,
+      dangerouslyAllowUnauthenticated: true,
+      dangerouslyAllowEphemeralIdempotency: true,
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
+        id: 'handler-recreate-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage: createMemoryNotionStorage(),
+        fetch: (input, init) => handler(new Request(input, init)),
+        autoStart: false,
+      }),
+    )
+
+    await collection.preload()
+    const insert = collection.insert(
+      testTodo({
+        id: 'handler-recreate-1',
+        title: 'Before deletion',
+      }),
+    )
+    await insert.isPersisted.promise
+    await collection.utils.syncNow()
+    const page = [...pages.values()][0]!
+    expect(page.properties['Client ID']).toBeDefined()
+    const transaction = collection.update('handler-recreate-1', (draft) => {
+      draft.title = 'Recreated through handler'
+    })
+    await transaction.isPersisted.promise
+    page.in_trash = true
+    await expect(collection.utils.syncNow()).rejects.toMatchObject({
+      code: 'page_not_found',
+    })
+    const [blocked] = await collection.utils.getPendingMutations()
+
+    await collection.utils.resolveDeletedMutation(blocked!.id, {
+      action: 'recreate',
+    })
+
+    expect(created).toBe(2)
+    expect(collection.utils.getSyncState().blockedMutation).toBeNull()
+    expect(await collection.utils.getPendingMutations()).toHaveLength(0)
+    expect(collection.get('handler-recreate-1')?.title).toBe(
+      'Recreated through handler',
+    )
+    await collection.cleanup()
+  })
+
+  it('binds the default global fetch before loading a collection', async () => {
+    const fetch = vi.fn(function (
+      this: typeof globalThis,
+      _input: string | URL | Request,
+    ) {
+      if (this !== globalThis) {
+        throw new TypeError('Illegal invocation')
+      }
+      return Promise.resolve(
+        Response.json({
+          rows: [testTodo({ id: 'default-fetch-row', title: 'Loaded' })],
+          hasMore: false,
+          nextCursor: null,
+        }),
+      )
+    })
+    vi.stubGlobal('fetch', fetch)
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
+        id: 'default-fetch-collection',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage: createMemoryNotionStorage(),
+        autoStart: false,
+      }),
+    )
+
+    await collection.preload()
+    await collection.utils.resumeSync()
+
+    expect(collection.get('default-fetch-row')?.title).toBe('Loaded')
+    expect(fetch).toHaveBeenCalled()
+    await collection.cleanup()
+  })
+
   it('reconciles when a background document becomes visible', async () => {
     const browserWindow = new EventTarget()
     const browserDocument = Object.assign(new EventTarget(), {
@@ -29,14 +178,16 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'visible-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage: createMemoryNotionStorage(),
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
         readOnly: true,
       }),
     )
@@ -55,12 +206,14 @@ describe('notionCollectionOptions', () => {
 
   it('omits mutation handlers for read-only collections', () => {
     const options = notionCollectionOptions({
+      tuning: {
+        pollIntervalMs: 0,
+      },
       id: 'read-only',
       endpoint: 'http://app.test/api/listening',
       schema: testSchema,
       storage: createMemoryNotionStorage(),
       readOnly: true,
-      pollIntervalMs: 0,
     })
 
     expect(options).not.toHaveProperty('onInsert')
@@ -84,14 +237,16 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'authenticated-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -139,13 +294,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'login-race-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage: createMemoryNotionStorage(),
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -174,14 +331,16 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'paused-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -221,13 +380,15 @@ describe('notionCollectionOptions', () => {
     }
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'legacy-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -276,13 +437,15 @@ describe('notionCollectionOptions', () => {
     }
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'quarantined-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -304,6 +467,50 @@ describe('notionCollectionOptions', () => {
     await collection.cleanup()
   })
 
+  it('surfaces a failed quarantined-state reset instead of silently succeeding', async () => {
+    let quarantine: NotionQuarantineRecord | null = {
+      collectionId: 'failed-quarantine-reset',
+      quarantinedAt: '2026-08-03T12:00:00.000Z',
+      reason: 'Malformed persisted state.',
+      value: {},
+    }
+    const storage: NotionCollectionStorage = {
+      kind: 'custom',
+      async load() {
+        return null
+      },
+      async save() {
+        throw new Error('The quarantine reset write failed.')
+      },
+      async clear() {},
+      async loadQuarantine() {
+        return quarantine
+      },
+      async clearQuarantine() {
+        quarantine = null
+      },
+    }
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
+        id: 'failed-quarantine-reset',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: vi.fn() as typeof fetch,
+      }),
+    )
+
+    await collection.preload()
+    await expect(
+      collection.utils.discardQuarantinedState({ acceptDataLoss: true }),
+    ).rejects.toThrow('The quarantine reset write failed.')
+    await collection.cleanup()
+  })
+
   it('hydrates cached rows while offline', async () => {
     const storage = createMemoryNotionStorage()
     const cached = testTodo({ id: 'cached-1', title: 'Available offline' })
@@ -317,13 +524,15 @@ describe('notionCollectionOptions', () => {
 
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'cached-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -342,14 +551,16 @@ describe('notionCollectionOptions', () => {
     const createTodos = () =>
       createCollection(
         notionCollectionOptions({
+          tuning: {
+            isOnline: () => false,
+            pollIntervalMs: 0,
+            coordinationStrategy: 'storage-lease',
+          },
           id: 'multi-context-todos',
           endpoint: 'http://app.test/api/todos',
           schema: testSchema,
           storage,
-          isOnline: () => false,
           fetch: vi.fn() as typeof fetch,
-          pollIntervalMs: 0,
-          coordinationStrategy: 'storage-lease',
         }),
       )
     const first = createTodos()
@@ -405,13 +616,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'versioned-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -467,13 +680,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'causal-write-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -535,13 +750,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'interleaved-write-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -622,15 +839,17 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+          fullReconciliationIntervalMs: 60 * 60_000,
+        },
         id: 'incremental-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
-        fullReconciliationIntervalMs: 60 * 60_000,
       }),
     )
 
@@ -686,15 +905,17 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+          fullReconciliationIntervalMs: 100,
+        },
         id: 'due-full-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
-        fullReconciliationIntervalMs: 100,
       }),
     )
 
@@ -728,14 +949,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pageSize: 20,
+          pollIntervalMs: 0,
+        },
         id: 'paginated-read-only',
         endpoint: 'http://app.test/api/listening',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pageSize: 20,
-        pollIntervalMs: 0,
         readOnly: true,
       }),
     )
@@ -775,14 +998,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'mutable-bootstrap',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -858,14 +1083,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
         id: 'durable-mutable-bootstrap',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => true,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -915,13 +1142,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'atomic-refresh-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
         readOnly: true,
       }),
     )
@@ -961,14 +1190,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pageSize: 1,
+          pollIntervalMs: 0,
+        },
         id: 'progressive-read-only',
         endpoint: 'http://app.test/api/listening',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pageSize: 1,
-        pollIntervalMs: 0,
         readOnly: true,
         syncMode: 'progressive',
       }),
@@ -1001,13 +1232,15 @@ describe('notionCollectionOptions', () => {
 
     const offlineCollection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'progressive-read-only',
         endpoint: 'http://app.test/api/listening',
         schema: testSchema,
         storage,
         fetch: vi.fn() as typeof globalThis.fetch,
-        isOnline: () => false,
-        pollIntervalMs: 0,
         readOnly: true,
         syncMode: 'progressive',
       }),
@@ -1064,14 +1297,16 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pageSize: 1,
+          pollIntervalMs: 0,
+        },
         id: 'progressive-window-refresh',
         endpoint: 'http://app.test/api/listening',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pageSize: 1,
-        pollIntervalMs: 0,
         readOnly: true,
         syncMode: 'progressive',
       }),
@@ -1116,13 +1351,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'offline-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1169,13 +1406,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'retry-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1221,13 +1460,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'failed-attempt-checkpoint',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1287,13 +1528,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'conflict-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -1342,13 +1585,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'recover-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1382,6 +1627,156 @@ describe('notionCollectionOptions', () => {
     await collection.cleanup()
   })
 
+  it('recreates a remotely deleted row from a blocked local update', async () => {
+    const storage = createMemoryNotionStorage()
+    let recreate = false
+    let remoteTitle = 'Before deletion'
+    const remote = testTodo({
+      id: 'deleted-recover-1',
+      title: 'Before deletion',
+      notionPageId: 'page-deleted-recover-1',
+    })
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST' && !recreate) {
+        return Response.json(
+          {
+            error: {
+              code: 'page_not_found',
+              message: 'The Notion page could not be found.',
+              retryable: false,
+            },
+          },
+          { status: 404 },
+        )
+      }
+      if (init?.method === 'POST') {
+        const body = JSON.parse(String(init.body)) as {
+          mutations: Array<{ type: string; value: TestTodo }>
+        }
+        expect(body.mutations[0]?.type).toBe('insert')
+        remoteTitle = body.mutations[0]!.value.title
+        return Response.json({
+          rows: [{ ...remote, title: remoteTitle }],
+          deletedKeys: [],
+        })
+      }
+      return Response.json({
+        rows: [{ ...remote, title: remoteTitle }],
+        hasMore: false,
+        nextCursor: null,
+      })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
+        id: 'deleted-recover-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        autoStart: false,
+      }),
+    )
+
+    await collection.preload()
+    await collection.utils.syncNow()
+    const transaction = collection.update('deleted-recover-1', (draft) => {
+      draft.title = 'Recreated locally'
+    })
+    await transaction.isPersisted.promise
+    await expect(collection.utils.syncNow()).rejects.toMatchObject({
+      code: 'page_not_found',
+    })
+    const [failed] = await collection.utils.getPendingMutations()
+    expect(collection.utils.getSyncState().blockedMutation).toMatchObject({
+      entryId: failed!.id,
+      error: { code: 'page_not_found', status: 404 },
+    })
+
+    recreate = true
+    await collection.utils.resolveDeletedMutation(failed!.id, {
+      action: 'recreate',
+    })
+
+    expect(await collection.utils.getPendingMutations()).toHaveLength(0)
+    expect(collection.get('deleted-recover-1')?.title).toBe('Recreated locally')
+    expect(collection.get('deleted-recover-1')?.notionPageId).toBe(
+      'page-deleted-recover-1',
+    )
+    await collection.cleanup()
+  })
+
+  it('drops a remotely deleted row only with explicit data-loss acknowledgement', async () => {
+    const storage = createMemoryNotionStorage()
+    let initialPull = true
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Response.json(
+          {
+            error: {
+              code: 'page_not_found',
+              message: 'The Notion page could not be found.',
+              retryable: false,
+            },
+          },
+          { status: 404 },
+        )
+      }
+      const rows = initialPull
+        ? [
+            testTodo({
+              id: 'deleted-discard-1',
+              notionPageId: 'page-deleted-discard-1',
+            }),
+          ]
+        : []
+      initialPull = false
+      return Response.json({ rows, hasMore: false, nextCursor: null })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
+        id: 'deleted-discard-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        autoStart: false,
+      }),
+    )
+
+    await collection.preload()
+    await collection.utils.syncNow()
+    const transaction = collection.update('deleted-discard-1', (draft) => {
+      draft.title = 'Discard this edit'
+    })
+    await transaction.isPersisted.promise
+    await expect(collection.utils.syncNow()).rejects.toMatchObject({
+      code: 'page_not_found',
+    })
+    const [failed] = await collection.utils.getPendingMutations()
+
+    await expect(
+      collection.utils.resolveDeletedMutation(failed!.id, {
+        action: 'discard',
+      } as never),
+    ).rejects.toMatchObject({ code: 'data_loss_not_accepted' })
+    await collection.utils.resolveDeletedMutation(failed!.id, {
+      action: 'discard',
+      acceptDataLoss: true,
+    })
+
+    expect(collection.get('deleted-discard-1')).toBeUndefined()
+    expect(await collection.utils.getPendingMutations()).toHaveLength(0)
+    await collection.cleanup()
+  })
+
   it('requires an online, explicit data-loss acknowledgement to discard an entry', async () => {
     const storage = createMemoryNotionStorage()
     let isOnline = false
@@ -1402,13 +1797,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'discard-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1446,13 +1843,15 @@ describe('notionCollectionOptions', () => {
     }
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'failed-write-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1475,13 +1874,15 @@ describe('notionCollectionOptions', () => {
     const storage = createMemoryNotionStorage()
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'observer-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -1522,13 +1923,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'checkpoint-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1583,13 +1986,15 @@ describe('notionCollectionOptions', () => {
     })
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'ordered-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => isOnline,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 0,
       }),
     )
 
@@ -1619,13 +2024,15 @@ describe('notionCollectionOptions', () => {
     const storage = createMemoryNotionStorage()
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => false,
+          pollIntervalMs: 0,
+        },
         id: 'bulk-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => false,
         fetch: vi.fn() as typeof fetch,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -1672,14 +2079,16 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => isOnline,
+          pollIntervalMs: 0,
+        },
         id: 'progress-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
         fetch: fetch as typeof globalThis.fetch,
-        isOnline: () => isOnline,
         autoStart: false,
-        pollIntervalMs: 0,
       }),
     )
     await collection.preload()
@@ -1752,13 +2161,15 @@ describe('notionCollectionOptions', () => {
     )
     const collection = createCollection(
       notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 10,
+        },
         id: 'cleanup-todos',
         endpoint: 'http://app.test/api/todos',
         schema: testSchema,
         storage,
-        isOnline: () => true,
         fetch: fetch as typeof globalThis.fetch,
-        pollIntervalMs: 10,
       }),
     )
     await collection.preload()

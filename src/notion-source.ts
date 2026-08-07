@@ -40,7 +40,7 @@ function notionObjectId(value: string): string {
 export async function resolveNotionDataSourceId(
   config: ResolveNotionDataSourceIdConfig,
 ): Promise<string> {
-  const fetcher = config.fetch ?? globalThis.fetch
+  const fetcher = config.fetch ?? globalThis.fetch?.bind(globalThis)
   if (!fetcher) throw new Error('A fetch implementation is required.')
 
   const baseUrl = (config.baseUrl ?? 'https://api.notion.com').replace(/\/$/, '')

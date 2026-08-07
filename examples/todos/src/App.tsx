@@ -1,5 +1,6 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { eq, useLiveQuery } from '@tanstack/react-db'
+import type { NotionSyncState } from 'tanstack-db-notion-adapter'
 import { useNotionSyncState } from 'tanstack-db-notion-adapter/react'
 import { todoCollection } from './collection'
 import type {
@@ -35,6 +36,86 @@ function AddTodo() {
         Add
       </button>
     </form>
+  )
+}
+
+function BlockedMutationNotice({
+  blocked,
+}: {
+  blocked: NonNullable<NotionSyncState['blockedMutation']>
+}) {
+  const [busy, setBusy] = useState(false)
+  const deleted = blocked.error.code === 'page_not_found'
+
+  function run(action: () => Promise<unknown>): void {
+    setBusy(true)
+    void action()
+      .catch(() => undefined)
+      .finally(() => setBusy(false))
+  }
+
+  return (
+    <aside className="blocked" role="alert">
+      <p>
+        <strong>Could not save changes:</strong> {blocked.error.message}{' '}
+        <code>{blocked.error.code}</code>
+      </p>
+      <div className="blocked-actions">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            run(() => todoCollection.utils.retryPendingMutation(blocked.entryId))
+          }
+        >
+          Retry
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() =>
+            run(() =>
+              todoCollection.utils.discardPendingMutation(blocked.entryId, {
+                acceptDataLoss: true,
+              }),
+            )
+          }
+        >
+          Discard local change
+        </button>
+        {deleted ? (
+          <>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                run(() =>
+                  todoCollection.utils.resolveDeletedMutation(blocked.entryId, {
+                    action: 'recreate',
+                  }),
+                )
+              }
+            >
+              Recreate in Notion
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                run(() =>
+                  todoCollection.utils.resolveDeletedMutation(blocked.entryId, {
+                    action: 'discard',
+                    acceptDataLoss: true,
+                  }),
+                )
+              }
+            >
+              Drop deleted row
+            </button>
+          </>
+        ) : null}
+      </div>
+    </aside>
   )
 }
 
@@ -143,6 +224,9 @@ export function App() {
       </header>
 
       {sync.error ? <p className="error">{sync.error}</p> : null}
+      {sync.blockedMutation ? (
+        <BlockedMutationNotice blocked={sync.blockedMutation} />
+      ) : null}
       <AddTodo />
 
       <nav aria-label="Filter todos">

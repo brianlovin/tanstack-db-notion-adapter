@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   createBrowserNotionStorage,
   type NotionPersistedState,
-} from '../src/index.js'
+} from '../src/advanced.js'
 
 interface StoredTodo {
   id: string

@@ -1,9 +1,11 @@
 import { createCollection } from '@tanstack/react-db'
 import {
-  createBrowserNotionStorage,
   notionCollectionOptions,
-  type LegacyNotionPersistedState,
 } from 'tanstack-db-notion-adapter'
+import {
+  createBrowserNotionStorage,
+  type LegacyNotionPersistedState,
+} from 'tanstack-db-notion-adapter/advanced'
 import {
   incidentCollection,
   setLabOnline,
@@ -93,13 +95,15 @@ export async function runStorageScenario(): Promise<ScenarioReport> {
   )(migrationId, legacy)
   const migrationCollection = createCollection(
     notionCollectionOptions({
+      tuning: {
+        pollIntervalMs: 0,
+        coordinationStrategy: 'storage-lease',
+        isOnline: () => false,
+      },
       id: migrationId,
       endpoint: '/api/incidents',
       schema: reliabilitySchema,
       storage,
-      pollIntervalMs: 0,
-      coordinationStrategy: 'storage-lease',
-      isOnline: () => false,
     }),
   )
   await migrationCollection.preload()
@@ -129,13 +133,15 @@ export async function runStorageScenario(): Promise<ScenarioReport> {
   )(corruptId, corrupt)
   const corruptCollection = createCollection(
     notionCollectionOptions({
+      tuning: {
+        pollIntervalMs: 0,
+        coordinationStrategy: 'storage-lease',
+        isOnline: () => false,
+      },
       id: corruptId,
       endpoint: '/api/incidents',
       schema: reliabilitySchema,
       storage,
-      pollIntervalMs: 0,
-      coordinationStrategy: 'storage-lease',
-      isOnline: () => false,
     }),
   )
   await corruptCollection.preload()
@@ -169,13 +175,15 @@ export async function runWriterScenario(): Promise<ScenarioReport> {
   const makeCollection = (storage: typeof firstStorage) =>
     createCollection(
       notionCollectionOptions({
+        tuning: {
+          pollIntervalMs: 0,
+          coordinationStrategy: 'storage-lease',
+          isOnline: () => false,
+        },
         id: collectionId,
         endpoint: '/api/incidents',
         schema: reliabilitySchema,
         storage,
-        pollIntervalMs: 0,
-        coordinationStrategy: 'storage-lease',
-        isOnline: () => false,
       }),
     )
   const first = makeCollection(firstStorage)

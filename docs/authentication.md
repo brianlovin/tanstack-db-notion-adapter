@@ -48,6 +48,8 @@ for one request boundary.
 ## Required production controls
 
 - Supply `authorize`; never enable `dangerouslyAllowUnauthenticated`.
+  The handler rejects that flag when `NODE_ENV=production`; configure
+  `authorize` instead.
 - Supply a durable idempotency store shared by every process that can write.
 - Apply normal CSRF protection to cookie-authenticated mutation routes.
 - Rate limit login and public endpoints in addition to the Notion-aware request

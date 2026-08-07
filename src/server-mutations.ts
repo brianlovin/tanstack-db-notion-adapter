@@ -301,6 +301,7 @@ export function createNotionMutationExecutor<
       throw error
     }
     if (!isPage(page)) return null
+    if (page.in_trash) return null
     if (
       page.parent?.type !== 'data_source_id' ||
       page.parent.data_source_id !== config.dataSourceId
@@ -474,7 +475,6 @@ export function createNotionMutationExecutor<
       case 'delete': {
         const existing = await resolvePage(mutation, signal, prefetchedPages)
         if (existing) {
-          if (existing.in_trash) return { deletedKey: mutation.key }
           await config.requestNotion(
             `/v1/pages/${encodeURIComponent(existing.id)}`,
             {
@@ -604,7 +604,7 @@ export function createNotionMutationExecutor<
           ? await config.idempotencyStore.execute(
               {
                 scope: `notion:${config.dataSourceId}:insert-key`,
-                key: normalized.key,
+                key: normalized.idempotencyKey ?? normalized.key,
                 fingerprint: await fingerprint(
                   config.schema.serialize(normalized.value),
                 ),

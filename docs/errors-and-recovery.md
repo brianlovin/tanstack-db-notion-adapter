@@ -48,6 +48,26 @@ clears after retry or discard. A mutation's `tx.isPersisted` promise resolves
 when the local durable outbox accepts it; it does not mean Notion accepted the
 write, and server rejection does not roll the transaction back.
 
+If the blocked error is `page_not_found`, the row may have been deleted in
+Notion while a local edit was pending. Resolve that head entry either by
+recreating the page from the pending local value or by explicitly discarding
+the local row:
+
+```ts
+await collection.utils.resolveDeletedMutation(blocked.entryId, {
+  action: 'recreate',
+})
+
+await collection.utils.resolveDeletedMutation(blocked.entryId, {
+  action: 'discard',
+  acceptDataLoss: true,
+})
+```
+
+Recreation preserves the row's Client ID and uses the normal idempotent insert
+path. Only the FIFO head can be resolved, and multi-mutation entries must be
+split or retried rather than partially transformed.
+
 ## Error classes
 
 - `unauthorized` / HTTP 401 or 403: restore the application session. Keep the

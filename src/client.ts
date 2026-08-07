@@ -10,9 +10,36 @@ import type {
 import {
   createBrowserSyncLifecycle,
   createJsonRequester,
-  createSerializedQueue,
   NotionSyncError,
 } from './browser-sync-runtime.js'
+import {
+  createNotionPersistedStateStore,
+  NotionPersistedStateError,
+} from './persisted-state.js'
+import { createSerializedQueue } from './browser-sync-runtime.js'
+import type {
+  LegacyNotionPersistedState,
+  NotionCollectionStorage,
+  NotionOutboxEntry,
+  NotionOutboxError,
+  NotionPersistedEnvelope,
+  NotionPersistedState,
+  NotionQuarantineRecord,
+  NotionRemotePaginationState,
+  NotionStorageLockOptions,
+} from './persisted-state.js'
+export type {
+  LegacyNotionPersistedState,
+  NotionCollectionStorage,
+  NotionOutboxEntry,
+  NotionOutboxError,
+  NotionPersistedEnvelope,
+  NotionPersistedState,
+  NotionQuarantineRecord,
+  NotionRemotePaginationState,
+  NotionStorageLockOptions,
+} from './persisted-state.js'
+export { NotionPersistedStateError } from './persisted-state.js'
 import type {
   NotionInvalidationVersion,
   NotionListResult,
@@ -27,103 +54,6 @@ import type {
   NotionSchema,
 } from './schema.js'
 export { NotionSyncError } from './browser-sync-runtime.js'
-
-export interface NotionOutboxEntry<TItem extends object> {
-  id: string
-  createdAt: string
-  attempts: number
-  lastAttemptAt: string | null
-  lastError: NotionOutboxError | null
-  batch: NotionMutationBatch<TItem>
-}
-
-export interface NotionOutboxError {
-  code: string
-  message: string
-  status: number | null
-  retryable: boolean
-  occurredAt: string
-  conflicts: Array<NotionPropertyConflict>
-}
-
-export interface LegacyNotionPersistedState<TItem extends object> {
-  version: 1
-  rows: Array<TItem>
-  outbox: Array<NotionOutboxEntry<TItem>>
-  lastSyncedAt: number | null
-}
-
-export interface NotionPersistedState<TItem extends object> {
-  version: 2
-  /** Monotonically increases on every committed local state transition. */
-  revision: number
-  rows: Array<TItem>
-  outbox: Array<NotionOutboxEntry<TItem>>
-  lastSyncedAt: number | null
-  /** Greatest remote last_edited_time incorporated into the local replica. */
-  remoteWatermark?: string | undefined
-  /** Last time a complete snapshot reconciled deletions and filter membership. */
-  lastFullReconciledAt?: number | undefined
-  remoteVersion?: number | undefined
-  pagination?: NotionRemotePaginationState | undefined
-}
-
-export type NotionPersistedEnvelope<TItem extends object> =
-  | LegacyNotionPersistedState<TItem>
-  | NotionPersistedState<TItem>
-
-export interface NotionQuarantineRecord {
-  collectionId: string
-  quarantinedAt: string
-  reason: string
-  value: unknown
-}
-
-export interface NotionStorageLockOptions {
-  signal?: AbortSignal
-  leaseMs?: number
-  acquireTimeoutMs?: number
-}
-
-export interface NotionCollectionStorage {
-  readonly kind:
-    | 'indexeddb'
-    | 'localstorage'
-    | 'memory'
-    | 'custom'
-    | 'unavailable'
-  load: <TItem extends object>(
-    collectionId: string,
-  ) => Promise<NotionPersistedEnvelope<TItem> | null>
-  save: <TItem extends object>(
-    collectionId: string,
-    state: NotionPersistedState<TItem>,
-  ) => Promise<void>
-  clear: (collectionId: string) => Promise<void>
-  /** Atomic compare-and-set used to fence stale browser writers. */
-  compareAndSet?: <TItem extends object>(
-    collectionId: string,
-    expectedRevision: number,
-    state: NotionPersistedState<TItem>,
-  ) => Promise<boolean>
-  /** Moves unreadable state aside instead of silently deleting it. */
-  quarantine?: (
-    collectionId: string,
-    value: unknown,
-    reason: string,
-  ) => Promise<NotionQuarantineRecord>
-  loadQuarantine?: (
-    collectionId: string,
-  ) => Promise<NotionQuarantineRecord | null>
-  clearQuarantine?: (collectionId: string) => Promise<void>
-  /** Cross-context lease used when the Web Locks API is unavailable. */
-  runExclusive?: <T>(
-    collectionId: string,
-    ownerId: string,
-    operation: (signal: AbortSignal) => Promise<T>,
-    options?: NotionStorageLockOptions,
-  ) => Promise<T>
-}
 
 export type NotionSyncStatus =
   | 'idle'
@@ -162,13 +92,6 @@ export interface NotionSyncState {
   } | null
 }
 
-export interface NotionRemotePaginationState {
-  mode: 'progressive'
-  loadedPages: number
-  nextCursor: string | null
-  hasMore: boolean
-}
-
 export interface NotionCollectionUtils<TItem extends object> extends UtilsRecord {
   /** Enables automatic reconciliation and immediately synchronizes. */
   resumeSync: () => Promise<void>
@@ -185,6 +108,12 @@ export interface NotionCollectionUtils<TItem extends object> extends UtilsRecord
   discardPendingMutation: (
     entryId: string,
     options: { acceptDataLoss: true },
+  ) => Promise<void>
+  resolveDeletedMutation: (
+    entryId: string,
+    options:
+      | { action: 'recreate' }
+      | { action: 'discard'; acceptDataLoss: true },
   ) => Promise<void>
   getQuarantinedState: () => Promise<NotionQuarantineRecord | null>
   discardQuarantinedState: (options: { acceptDataLoss: true }) => Promise<void>
@@ -212,6 +141,20 @@ export interface NotionCollectionConfig<TFields extends NotionFields>
   schema: NotionSchema<TFields>
   storage?: NotionCollectionStorage
   fetch?: typeof globalThis.fetch
+  tuning?: NotionCollectionTuning
+  /**
+   * Start remote reconciliation as soon as the local cache is ready. Disable
+   * this when authentication must finish before the sync endpoint is called.
+   * @default true
+   */
+  autoStart?: boolean
+  /** Disable collection mutations for a source that is only read locally. */
+  readOnly?: boolean
+  /** Fetch every remote page, or materialize one page at a time. @default 'eager' */
+  syncMode?: 'eager' | 'progressive'
+}
+
+export interface NotionCollectionTuning {
   /** Notion returns at most 100 rows per API page. @default 100 */
   pageSize?: number
   /** Background reconciliation interval. Set to 0 to disable. @default 60000 */
@@ -230,27 +173,8 @@ export interface NotionCollectionConfig<TFields extends NotionFields>
   isOnline?: () => boolean
   /** Force the IndexedDB lease path for fallback testing. @default 'auto' */
   coordinationStrategy?: 'auto' | 'storage-lease'
-  /** Disable collection mutations for a source that is only read locally. */
-  readOnly?: boolean
-  /** Fetch every remote page, or materialize one page at a time. @default 'eager' */
-  syncMode?: 'eager' | 'progressive'
   /** Reconcile when a background tab becomes visible. @default true */
   refreshOnWindowFocus?: boolean
-  /**
-   * Start remote reconciliation as soon as the local cache is ready. Disable
-   * this when authentication must finish before the sync endpoint is called.
-   * @default true
-   */
-  autoStart?: boolean
-}
-
-export class NotionPersistedStateError extends Error {
-  readonly code = 'persisted_state_quarantined'
-
-  constructor(message: string) {
-    super(message)
-    this.name = 'NotionPersistedStateError'
-  }
 }
 
 export class NotionStorageConflictError extends Error {
@@ -1105,26 +1029,31 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   type SyncParams = Parameters<SyncConfig<TItem, string>['sync']>[0]
 
   const storage = config.storage ?? createBrowserNotionStorage()
-  const fetcher = config.fetch ?? globalThis.fetch
+  const persistence = createNotionPersistedStateStore<TItem>(
+    storage,
+    config.id,
+  )
+  const fetcher = config.fetch ?? globalThis.fetch?.bind(globalThis)
   if (!fetcher) throw new Error('A fetch implementation is required.')
   if (config.syncMode === 'progressive' && !config.readOnly) {
     throw new Error('Progressive sync requires a read-only collection.')
   }
 
   const endpoint = config.endpoint.replace(/\/$/, '')
-  const pageSize = Math.min(100, Math.max(1, config.pageSize ?? 100))
-  const pollIntervalMs = Math.max(0, config.pollIntervalMs ?? 60_000)
+  const tuning = config.tuning ?? {}
+  const pageSize = Math.min(100, Math.max(1, tuning.pageSize ?? 100))
+  const pollIntervalMs = Math.max(0, tuning.pollIntervalMs ?? 60_000)
   const invalidationPollIntervalMs = Math.max(
     0,
-    config.invalidationPollIntervalMs ?? 0,
+    tuning.invalidationPollIntervalMs ?? 0,
   )
   const fullReconciliationIntervalMs = Math.max(
     0,
-    config.fullReconciliationIntervalMs ?? 60 * 60_000,
+    tuning.fullReconciliationIntervalMs ?? 60 * 60_000,
   )
   const maxMutationsPerBatch = Math.min(
     50,
-    Math.max(1, Math.floor(config.maxMutationsPerBatch ?? 10)),
+    Math.max(1, Math.floor(tuning.maxMutationsPerBatch ?? 10)),
   )
   const instanceId = randomInstanceId()
   const listeners = new Set<() => void>()
@@ -1140,10 +1069,10 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   let quarantine: NotionQuarantineRecord | null = null
   const operationQueue = createSerializedQueue()
   const lifecycle = createBrowserSyncLifecycle({
-    ...(config.isOnline ? { isOnline: config.isOnline } : {}),
-    ...(config.refreshOnWindowFocus === undefined
+    ...(tuning.isOnline ? { isOnline: tuning.isOnline } : {}),
+    ...(tuning.refreshOnWindowFocus === undefined
       ? {}
-      : { refreshOnWindowFocus: config.refreshOnWindowFocus }),
+      : { refreshOnWindowFocus: tuning.refreshOnWindowFocus }),
     focusMode: 'visible-document',
     pollIntervalMs,
     invalidationPollIntervalMs,
@@ -1215,7 +1144,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     for (let attempt = 0; ; attempt += 1) {
       try {
         if (
-          config.coordinationStrategy !== 'storage-lease' &&
+          tuning.coordinationStrategy !== 'storage-lease' &&
           typeof navigator !== 'undefined' &&
           navigator.locks
         ) {
@@ -1313,9 +1242,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     state.rows = [...validRows.values()]
     if (migrated.migrated) {
       const nextState = { ...state, revision: state.revision + 1 }
-      const saved = storage.compareAndSet
-        ? await storage.compareAndSet(config.id, state.revision, nextState)
-        : await storage.save(config.id, nextState).then(() => true)
+      const saved = await persistence.compareAndSet(nextState)
       if (!saved) throw new NotionStorageConflictError()
       state = nextState
     }
@@ -1323,11 +1250,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   }
 
   const reload = async () => {
-    quarantine = (await storage.loadQuarantine?.(config.id)) ?? null
-    if (quarantine) {
-      throw new NotionPersistedStateError(quarantine.reason)
-    }
-    const persisted = await storage.load<TItem>(config.id)
+    const persisted = await persistence.reload()
     try {
       await hydratePersistedState(persisted)
     } catch (error) {
@@ -1360,9 +1283,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   ) => {
     if (disposed) throw lifecycle.signal.reason
     const committed = { ...nextState, version: 2 as const, revision: state.revision + 1 }
-    const saved = storage.compareAndSet
-      ? await storage.compareAndSet(config.id, state.revision, committed)
-      : await storage.save(config.id, committed).then(() => true)
+    const saved = await persistence.compareAndSet(committed)
     if (!saved) throw new NotionStorageConflictError()
     state = committed
     if (nextRows) applyRows(nextRows)
@@ -1987,9 +1908,107 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       )
       await synchronize('full')
     },
+    async resolveDeletedMutation(entryId, options) {
+      await initialization
+      if (options.action === 'discard' && options.acceptDataLoss !== true) {
+        throw new NotionSyncError({
+          code: 'data_loss_not_accepted',
+          message:
+            'Discarding a remotely deleted row requires acceptDataLoss: true.',
+          retryable: false,
+        })
+      }
+      if (!online()) {
+        throw new NotionSyncError({
+          code: 'discard_requires_online',
+          message: 'Reconnect before resolving a remotely deleted row.',
+          retryable: true,
+        })
+      }
+      await exclusive(() =>
+        crossTab(async () => {
+          await reload()
+          const index = state.outbox.findIndex((entry) => entry.id === entryId)
+          if (index < 0) {
+            throw new NotionSyncError({
+              code: 'outbox_entry_not_found',
+              message: 'The pending mutation no longer exists.',
+              retryable: false,
+            })
+          }
+          if (index !== 0) {
+            throw new NotionSyncError({
+              code: 'deleted_mutation_not_resolvable',
+              message: 'Only the blocked head mutation can be resolved.',
+              retryable: false,
+            })
+          }
+          const entry = state.outbox[index]!
+          if (entry.lastError?.code !== 'page_not_found') {
+            throw new NotionSyncError({
+              code: 'deleted_mutation_not_resolvable',
+              message:
+                'Only a pending mutation blocked by page_not_found can be resolved this way.',
+              retryable: false,
+            })
+          }
+          const mutation = entry.batch.mutations[0]
+          if (entry.batch.mutations.length !== 1) {
+            throw new NotionSyncError({
+              code: 'deleted_mutation_not_resolvable',
+              message:
+                'Only a single pending row mutation can be resolved after deletion.',
+              retryable: false,
+            })
+          }
+          const outbox = [...state.outbox]
+          if (options.action === 'recreate') {
+            const update = mutation
+            if (!update || update.type !== 'update') {
+              throw new NotionSyncError({
+                code: 'deleted_mutation_not_resolvable',
+                message:
+                  'Only a single pending row update can be recreated after deletion.',
+                retryable: false,
+              })
+            }
+            outbox[index] = {
+              ...entry,
+              attempts: 0,
+              lastAttemptAt: null,
+              lastError: null,
+              batch: {
+                ...entry.batch,
+                idempotencyKey: randomInstanceId(),
+                mutations: [
+                  {
+                    type: 'insert',
+                    key: update.key,
+                    value: update.value,
+                    idempotencyKey: randomInstanceId(),
+                  },
+                ],
+              },
+            }
+            await persistStateOnly({ ...state, outbox })
+            return
+          }
+          const key = mutation?.key
+          const rows =
+            key === undefined
+              ? state.rows
+              : state.rows.filter((row) => config.schema.getKey(row) !== key)
+          outbox.splice(index, 1)
+          await commitState({ ...state, rows, outbox }, new Map(
+            rows.map((row) => [config.schema.getKey(row), row]),
+          ))
+        }),
+      )
+      await synchronize('full')
+    },
     async getQuarantinedState() {
       await initialization
-      quarantine = (await storage.loadQuarantine?.(config.id)) ?? quarantine
+      quarantine = (await persistence.loadQuarantine()) ?? quarantine
       return quarantine ? clone(quarantine) : null
     },
     async discardQuarantinedState(options) {
@@ -2009,10 +2028,13 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
         })
       }
       await crossTab(async () => {
-        await storage.clearQuarantine!(config.id)
+        await persistence.clearQuarantine()
         quarantine = null
         state = emptyState<TItem>()
-        await storage.save(config.id, state)
+        await persistence.saveReset({
+          ...state,
+          revision: state.revision + 1,
+        })
         applyRows(new Map())
         setSyncState({
           status: online() ? 'idle' : 'offline',
@@ -2043,17 +2065,8 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     endpoint: _endpoint,
     fetch: _fetch,
     storage: _storage,
-    pageSize: _pageSize,
-    pollIntervalMs: _pollIntervalMs,
-    invalidationPollIntervalMs: _invalidationPollIntervalMs,
-    fullReconciliationIntervalMs: _fullReconciliationIntervalMs,
-    maxMutationsPerBatch: _maxMutationsPerBatch,
-    isOnline: _isOnline,
-    coordinationStrategy: _coordinationStrategy,
-    readOnly: _readOnly,
+    tuning: _tuning,
     syncMode: _syncMode,
-    refreshOnWindowFocus: _refreshOnWindowFocus,
-    autoStart: _autoStart,
     ...baseConfig
   } = config
 

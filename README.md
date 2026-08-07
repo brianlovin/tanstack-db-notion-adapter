@@ -124,7 +124,8 @@ These three settings are production requirements:
 - **Authorize every request.** Never deploy
   `dangerouslyAllowUnauthenticated`; otherwise anyone who can reach the route
   can read or mutate the collection. See
-  [authentication](docs/authentication.md).
+  [authentication](docs/authentication.md). The handler refuses to start with
+  that flag when `NODE_ENV=production`.
 - **Use a durable shared idempotency store.** The store must be shared by every
   server instance so retries and duplicate requests cannot create duplicate
   writes. See [durable idempotency stores](docs/idempotency-store.md).
@@ -181,6 +182,20 @@ export function SyncNotice() {
 the outbox. Transient failures remain retryable and do not populate this
 field. See [errors and recovery](docs/errors-and-recovery.md) for conflict
 handling and durable recovery.
+
+When a row was deleted remotely while its local update was pending, resolve the
+blocked head without throwing away the edit:
+
+```ts
+await entries.utils.resolveDeletedMutation(blocked.entryId, {
+  action: 'recreate',
+})
+// Or explicitly discard the local row and edit:
+await entries.utils.resolveDeletedMutation(blocked.entryId, {
+  action: 'discard',
+  acceptDataLoss: true,
+})
+```
 
 ## Page contents
 
@@ -268,13 +283,34 @@ covered in the [schema workflow](docs/schema-workflow.md).
   truncates pagination at that boundary. See
   [large data sources](docs/large-datasets.md).
 - If a page is deleted in Notion while a local edit is pending, that mutation
-  remains blocked until you explicitly retry or discard it.
+  blocks until you explicitly recreate the row from the local value or discard
+  it with data-loss acknowledgement.
 - Concurrent edits to the same property surface as `property_conflict`.
   There is no automatic semantic merge; resolve the conflict explicitly.
 - Page bodies are Markdown-only. Pages containing content the adapter cannot
   represent are read-only through the page-content client.
 - Files and offline media are not cached. Notion-hosted file URLs expire.
 - Page-content drafts for deleted rows are not pruned from local storage.
+
+## Upgrading to 0.3
+
+Application-facing schema, collection, recovery, and page-content APIs stay at
+the package root. Storage constructors, persistence envelopes, coordination
+types, protocol types, and internal Notion page representations moved to
+`tanstack-db-notion-adapter/advanced`. Collection tuning options moved under an
+optional `tuning` object:
+
+```ts
+notionCollectionOptions({
+  id: 'journal',
+  endpoint: '/api/journal',
+  schema: notionDataSourceSchema,
+  tuning: { pollIntervalMs: 30_000 },
+})
+```
+
+`autoStart` remains a top-level lifecycle option. See
+[advanced exports](docs/operations.md#advanced-exports) for the complete list.
 
 ## Examples
 

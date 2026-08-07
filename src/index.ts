@@ -11,9 +11,6 @@ export {
   type NotionDateValue,
   type NotionFileReference,
   type NotionFormulaValue,
-  type NotionPageLike,
-  type NotionPropertyReference,
-  type NotionPropertyReferenceInput,
   type NotionRichTextAnnotations,
   type NotionRichTextItem,
   type NotionRollupValue,
@@ -24,42 +21,20 @@ export {
 } from './schema.js'
 
 export {
-  createBrowserNotionStorage,
-  createMemoryNotionStorage,
   notionCollectionOptions,
-  NotionCrossTabCoordinationError,
-  NotionPersistedStateError,
-  NotionStorageConflictError,
-  NotionStorageUnavailableError,
   NotionSyncError,
   type NotionCollectionConfig,
-  type NotionCollectionStorage,
   type NotionCollectionUtils,
-  type LegacyNotionPersistedState,
+  type NotionCollectionTuning,
   type NotionOutboxEntry,
   type NotionOutboxError,
-  type NotionPersistedState,
-  type NotionPersistedEnvelope,
-  type NotionQuarantineRecord,
-  type NotionRemotePaginationState,
-  type NotionStorageLockOptions,
   type NotionSyncProgress,
   type NotionSyncState,
   type NotionSyncStatus,
 } from './client.js'
 
 export type {
-  NotionErrorBody,
-  NotionInvalidationVersion,
-  NotionListResult,
-  NotionMutation,
-  NotionMutationBatch,
-  NotionMutationResult,
-  NotionPageContent,
-  NotionPageContentMutation,
   NotionPropertyConflict,
-  NotionSchemaMismatch,
-  NotionSchemaResult,
 } from './protocol.js'
 
 export {

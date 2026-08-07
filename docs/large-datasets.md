@@ -96,10 +96,10 @@ snapshot would weaken deletion and conflict guarantees.
   and safely merged rather than skipped.
 - A complete snapshot runs at most hourly by default to reconcile deletions,
   missed webhook events, and rows that stopped matching a fixed filter. Set
-  `fullReconciliationIntervalMs: 0` to run it only through `syncNow()`, or use a
+  `tuning.fullReconciliationIntervalMs: 0` to run it only through `syncNow()`, or use a
   longer interval when stale deletions are acceptable.
 - For sources with thousands of rows, prefer webhook invalidation, lengthen the
-  polling interval, or set `pollIntervalMs: 0` when the application owns another
+  polling interval, or set `tuning.pollIntervalMs: 0` when the application owns another
   refresh trigger.
 - `completeProperties` adds paginated property requests per row and field.
 - Share one `NotionRateLimiter` for handlers using the same connection.
@@ -125,7 +125,7 @@ prevention, lost-response recovery, and update conflict checks.
 
 Browser collections send 10 mutations per request by default, providing regular
 durable progress checkpoints and limiting how many writes wait behind one slow
-Notion response. Increase `maxMutationsPerBatch` toward 50 to minimize compound
+Notion response. Increase `tuning.maxMutationsPerBatch` toward 50 to minimize compound
 identity queries during controlled imports; reduce it when faster progress and
 smaller retry units matter more. `getSyncState().progress` exposes completed
 mutations, total mutations, and the active batch size.
