@@ -17,6 +17,45 @@ afterEach(() => {
 })
 
 describe('notionCollectionOptions', () => {
+  it('binds the default global fetch before loading a collection', async () => {
+    const fetch = vi.fn(function (
+      this: typeof globalThis,
+      _input: string | URL | Request,
+    ) {
+      if (this !== globalThis) {
+        throw new TypeError('Illegal invocation')
+      }
+      return Promise.resolve(
+        Response.json({
+          rows: [testTodo({ id: 'default-fetch-row', title: 'Loaded' })],
+          hasMore: false,
+          nextCursor: null,
+        }),
+      )
+    })
+    vi.stubGlobal('fetch', fetch)
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
+        id: 'default-fetch-collection',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage: createMemoryNotionStorage(),
+        autoStart: false,
+      }),
+    )
+
+    await collection.preload()
+    await collection.utils.resumeSync()
+
+    expect(collection.get('default-fetch-row')?.title).toBe('Loaded')
+    expect(fetch).toHaveBeenCalled()
+    await collection.cleanup()
+  })
+
   it('reconciles when a background document becomes visible', async () => {
     const browserWindow = new EventTarget()
     const browserDocument = Object.assign(new EventTarget(), {

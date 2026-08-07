@@ -1033,7 +1033,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     storage,
     config.id,
   )
-  const fetcher = config.fetch ?? globalThis.fetch
+  const fetcher = config.fetch ?? globalThis.fetch?.bind(globalThis)
   if (!fetcher) throw new Error('A fetch implementation is required.')
   if (config.syncMode === 'progressive' && !config.readOnly) {
     throw new Error('Progressive sync requires a read-only collection.')

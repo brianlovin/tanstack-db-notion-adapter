@@ -412,7 +412,7 @@ function manifestPropertyConfig(
 export async function inspectNotionDataSource(
   config: InspectNotionDataSourceConfig,
 ): Promise<NotionDataSourceSnapshot> {
-  const fetcher = config.fetch ?? globalThis.fetch
+  const fetcher = config.fetch ?? globalThis.fetch?.bind(globalThis)
   if (!fetcher) throw new Error('A fetch implementation is required.')
   const notionVersion = config.notionVersion ?? LATEST_NOTION_VERSION
   const baseUrl = (config.baseUrl ?? 'https://api.notion.com').replace(/\/$/, '')
@@ -908,7 +908,7 @@ export async function pushNotionSchema(
     }
   }
 
-  const fetcher = config.fetch ?? globalThis.fetch
+  const fetcher = config.fetch ?? globalThis.fetch?.bind(globalThis)
   if (!fetcher) throw new Error('A fetch implementation is required.')
   const baseUrl = (config.baseUrl ?? 'https://api.notion.com').replace(/\/$/, '')
   const response = await fetcher(

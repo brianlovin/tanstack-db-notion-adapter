@@ -147,7 +147,7 @@ export function createNotionPageContentClient<
   config: NotionPageContentClientConfig<TItem>,
 ): NotionPageContentClient {
   const storage = config.storage ?? createBrowserNotionStorage()
-  const fetcher = config.fetch ?? globalThis.fetch
+  const fetcher = config.fetch ?? globalThis.fetch?.bind(globalThis)
   if (!fetcher) throw new Error('A fetch implementation is required.')
 
   const endpoint = config.endpoint.replace(/\/$/, '')

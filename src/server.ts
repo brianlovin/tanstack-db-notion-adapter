@@ -619,7 +619,7 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     )
   }
 
-  const fetcher = config.fetch ?? globalThis.fetch
+  const fetcher = config.fetch ?? globalThis.fetch?.bind(globalThis)
   if (!fetcher) throw new Error('A fetch implementation is required.')
   const idempotencyStore =
     config.idempotencyStore ??
