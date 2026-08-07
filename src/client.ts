@@ -1985,6 +1985,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
                     type: 'insert',
                     key: update.key,
                     value: update.value,
+                    idempotencyKey: randomInstanceId(),
                   },
                 ],
               },

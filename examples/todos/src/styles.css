@@ -238,3 +238,39 @@ ul {
     display: none;
   }
 }
+
+.blocked {
+  border: 1px solid #d93025;
+  border-radius: 8px;
+  background: #fdecea;
+  color: #7f1d1d;
+  padding: 12px 14px;
+  margin: 12px 0;
+  font-size: 14px;
+}
+
+.blocked p {
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+
+.blocked code {
+  background: #fff;
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.blocked-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.blocked-actions button {
+  background: #fff;
+  border: 1px solid #d93025;
+  color: #7f1d1d;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}

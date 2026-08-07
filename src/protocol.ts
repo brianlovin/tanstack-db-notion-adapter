@@ -1,5 +1,14 @@
 export type NotionMutation<TItem extends object> =
-  | { type: 'insert'; key: string; value: TItem }
+  | {
+      type: 'insert'
+      key: string
+      value: TItem
+      /**
+       * Optional fresh identity for an intentional insert replay, such as
+       * recreating a row whose original insert was already acknowledged.
+       */
+      idempotencyKey?: string
+    }
   | {
       type: 'update'
       key: string

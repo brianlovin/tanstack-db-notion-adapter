@@ -4,19 +4,127 @@ import {
   notionCollectionOptions,
 } from '../src/index.js'
 import {
+  createNotionSyncHandler,
+} from '../src/server.js'
+import {
   createMemoryNotionStorage,
   type NotionCollectionStorage,
   type NotionPersistedEnvelope,
   type NotionPersistedState,
   type NotionQuarantineRecord,
 } from '../src/advanced.js'
-import { testSchema, testTodo, type TestTodo } from './fixtures.js'
+import {
+  notionPage,
+  notionProperties,
+  testSchema,
+  testTodo,
+  type TestTodo,
+} from './fixtures.js'
 
 afterEach(() => {
   vi.unstubAllGlobals()
 })
 
 describe('notionCollectionOptions', () => {
+  it('recreates a deleted row through the server without reusing insert idempotency', async () => {
+    const pages = new Map<string, ReturnType<typeof notionPage>>()
+    let created = 0
+    const notionFetch = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const requestUrl = new URL(
+        typeof input === 'string' || input instanceof URL ? input : input.url,
+      )
+      const method = init?.method ?? 'GET'
+      const body = init?.body ? JSON.parse(String(init.body)) : null
+      if (method === 'GET' && requestUrl.pathname === '/v1/data_sources/source-1') {
+        return Response.json({ object: 'data_source', properties: notionProperties })
+      }
+      if (method === 'POST' && requestUrl.pathname.endsWith('/query')) {
+        return Response.json({
+          results: [...pages.values()].filter((candidate) => !candidate.in_trash),
+          has_more: false,
+          next_cursor: null,
+        })
+      }
+      if (method === 'GET' && requestUrl.pathname.startsWith('/v1/pages/')) {
+        const found = pages.get(requestUrl.pathname.split('/').pop()!)
+        return found
+          ? Response.json(found)
+          : Response.json({ code: 'object_not_found' }, { status: 404 })
+      }
+      if (method === 'POST' && requestUrl.pathname === '/v1/pages') {
+        created += 1
+        const pageId = `page-handler-recreated-${created}`
+        const properties = body.properties
+        const recreated = notionPage(
+          testTodo({
+            id: properties['Client ID'].rich_text[0].text.content,
+            title: properties.Task.title[0].text.content,
+            notionPageId: pageId,
+          }),
+          pageId,
+        )
+        pages.set(pageId, recreated)
+        return Response.json(recreated)
+      }
+      return Response.json({ code: 'unhandled' }, { status: 500 })
+    })
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: notionFetch as typeof globalThis.fetch,
+      dangerouslyAllowUnauthenticated: true,
+      dangerouslyAllowEphemeralIdempotency: true,
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: {
+          isOnline: () => true,
+          pollIntervalMs: 0,
+        },
+        id: 'handler-recreate-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage: createMemoryNotionStorage(),
+        fetch: (input, init) => handler(new Request(input, init)),
+        autoStart: false,
+      }),
+    )
+
+    await collection.preload()
+    const insert = collection.insert(
+      testTodo({
+        id: 'handler-recreate-1',
+        title: 'Before deletion',
+      }),
+    )
+    await insert.isPersisted.promise
+    await collection.utils.syncNow()
+    const page = [...pages.values()][0]!
+    expect(page.properties['Client ID']).toBeDefined()
+    const transaction = collection.update('handler-recreate-1', (draft) => {
+      draft.title = 'Recreated through handler'
+    })
+    await transaction.isPersisted.promise
+    page.in_trash = true
+    await expect(collection.utils.syncNow()).rejects.toMatchObject({
+      code: 'page_not_found',
+    })
+    const [blocked] = await collection.utils.getPendingMutations()
+
+    await collection.utils.resolveDeletedMutation(blocked!.id, {
+      action: 'recreate',
+    })
+
+    expect(created).toBe(2)
+    expect(collection.utils.getSyncState().blockedMutation).toBeNull()
+    expect(await collection.utils.getPendingMutations()).toHaveLength(0)
+    expect(collection.get('handler-recreate-1')?.title).toBe(
+      'Recreated through handler',
+    )
+    await collection.cleanup()
+  })
+
   it('binds the default global fetch before loading a collection', async () => {
     const fetch = vi.fn(function (
       this: typeof globalThis,

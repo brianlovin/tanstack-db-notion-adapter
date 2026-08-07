@@ -604,7 +604,7 @@ export function createNotionMutationExecutor<
           ? await config.idempotencyStore.execute(
               {
                 scope: `notion:${config.dataSourceId}:insert-key`,
-                key: normalized.key,
+                key: normalized.idempotencyKey ?? normalized.key,
                 fingerprint: await fingerprint(
                   config.schema.serialize(normalized.value),
                 ),
