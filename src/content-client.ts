@@ -206,56 +206,62 @@ export function createNotionPageContentClient<
   const persist = async (next: Map<string, NotionPageContentSnapshot>) => {
     const previous = records
     let desired = next
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      const lastSyncedAt = [...desired.values()].reduce<number | null>(
-        (latest, record) =>
-          record.lastSyncedAt !== null &&
-          (latest === null || record.lastSyncedAt > latest)
-            ? record.lastSyncedAt
-            : latest,
-        null,
-      )
-      const state: NotionPersistedState<NotionPageContentSnapshot> = {
-        ...emptyPersistedState(),
-        revision: storageRevision + 1,
-        rows: [...desired.values()],
-        lastSyncedAt,
-      }
-      const saved = storage.compareAndSet
-        ? await storage.compareAndSet(storageId, storageRevision, state)
-        : await storage.save(storageId, state).then(() => true)
-      if (saved) {
-        storageRevision = state.revision
-        records = desired
-        notify()
-        return
-      }
+    try {
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        const lastSyncedAt = [...desired.values()].reduce<number | null>(
+          (latest, record) =>
+            record.lastSyncedAt !== null &&
+            (latest === null || record.lastSyncedAt > latest)
+              ? record.lastSyncedAt
+              : latest,
+          null,
+        )
+        const state: NotionPersistedState<NotionPageContentSnapshot> = {
+          ...emptyPersistedState(),
+          revision: storageRevision + 1,
+          rows: [...desired.values()],
+          lastSyncedAt,
+        }
+        const saved = storage.compareAndSet
+          ? await storage.compareAndSet(storageId, storageRevision, state)
+          : await storage.save(storageId, state).then(() => true)
+        if (saved) {
+          storageRevision = state.revision
+          records = desired
+          notify()
+          return
+        }
 
-      const persisted = await storage.load<NotionPageContentSnapshot>(storageId)
-      storageRevision =
-        persisted?.version === 2 ? persisted.revision : 0
-      const reloaded = new Map<string, NotionPageContentSnapshot>()
-      for (const value of persisted?.rows ?? []) {
-        if (isSnapshot(value)) reloaded.set(value.key, value)
+        const persisted = await storage.load<NotionPageContentSnapshot>(storageId)
+        storageRevision =
+          persisted?.version === 2 ? persisted.revision : 0
+        const reloaded = new Map<string, NotionPageContentSnapshot>()
+        for (const value of persisted?.rows ?? []) {
+          if (isSnapshot(value)) reloaded.set(value.key, value)
+        }
+        const merged = new Map(reloaded)
+        for (const [key, value] of previous) {
+          const local = desired.get(key)
+          if (JSON.stringify(local) === JSON.stringify(value)) continue
+          if (local === undefined) merged.delete(key)
+          else merged.set(key, local)
+        }
+        for (const [key, local] of desired) {
+          if (previous.has(key)) continue
+          merged.set(key, local)
+        }
+        records = merged
+        desired = merged
       }
-      const merged = new Map(reloaded)
-      for (const [key, value] of previous) {
-        const local = desired.get(key)
-        if (JSON.stringify(local) === JSON.stringify(value)) continue
-        if (local === undefined) merged.delete(key)
-        else merged.set(key, local)
-      }
-      for (const [key, local] of desired) {
-        if (previous.has(key)) continue
-        merged.set(key, local)
-      }
-      records = reloaded
-      desired = merged
+      throw new NotionSyncError({
+        code: 'storage_revision_conflict',
+        message: 'Another tab saved a newer page-content draft.',
+      })
+    } catch (error) {
+      records = desired
+      notify()
+      throw error
     }
-    throw new NotionSyncError({
-      code: 'storage_revision_conflict',
-      message: 'Another tab saved a newer page-content draft.',
-    })
   }
 
   const initialization = (async () => {
