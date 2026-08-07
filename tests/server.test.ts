@@ -1103,6 +1103,7 @@ describe('createNotionSyncHandler', () => {
 
   it('resolves a full update batch with one data-source query', async () => {
     const notion = createFakeNotion()
+    const events: Array<NotionServerEvent> = []
     const rows = Array.from({ length: 50 }, (_, index) => {
       const row = testTodo({
         id: `bulk-update-${index}`,
@@ -1121,6 +1122,7 @@ describe('createNotionSyncHandler', () => {
       maxRetries: 0,
       authorize: () => true,
       idempotencyStore: createMemoryNotionIdempotencyStore(),
+      onEvent: (event) => events.push(event),
     })
 
     const response = await handler(
@@ -1154,6 +1156,18 @@ describe('createNotionSyncHandler', () => {
     expect(
       notion.calls.filter(
         ({ method, body }) => method === 'PATCH' && body?.properties?.Done,
+      ),
+    ).toHaveLength(50)
+    expect(
+      events.filter(
+        ({ outcome, operation }) =>
+          outcome === 'success' && operation === 'data_source.query',
+      ),
+    ).toHaveLength(1)
+    expect(
+      events.filter(
+        ({ outcome, operation }) =>
+          outcome === 'success' && operation === 'page.update',
       ),
     ).toHaveLength(50)
   })

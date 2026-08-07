@@ -32,6 +32,7 @@ interface ScenarioDefinition {
 
 const fallbackSyncState: NotionSyncState = {
   status: 'idle',
+  progress: null,
   pendingMutations: 0,
   lastSyncedAt: null,
   remoteVersion: null,

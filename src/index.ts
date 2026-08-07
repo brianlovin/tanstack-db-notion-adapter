@@ -43,6 +43,7 @@ export {
   type NotionQuarantineRecord,
   type NotionRemotePaginationState,
   type NotionStorageLockOptions,
+  type NotionSyncProgress,
   type NotionSyncState,
   type NotionSyncStatus,
 } from './client.js'

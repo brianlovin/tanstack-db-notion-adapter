@@ -133,8 +133,22 @@ export type NotionSyncStatus =
   | 'offline'
   | 'error'
 
+export type NotionSyncProgress =
+  | {
+      phase: 'push'
+      completedMutations: number
+      totalMutations: number
+      activeBatchMutations: number
+    }
+  | {
+      phase: 'pull'
+      loadedPages: number
+      loadedRows: number
+    }
+
 export interface NotionSyncState {
   status: NotionSyncStatus
+  progress: NotionSyncProgress | null
   pendingMutations: number
   lastSyncedAt: number | null
   remoteVersion: number | null
@@ -206,7 +220,7 @@ export interface NotionCollectionConfig<TFields extends NotionFields>
    * @default 3600000
    */
   fullReconciliationIntervalMs?: number
-  /** Maximum mutations sent in one server request. Must be between 1 and 50. @default 50 */
+  /** Maximum mutations sent in one server request. Must be between 1 and 50. @default 10 */
   maxMutationsPerBatch?: number
   /** Override browser connectivity detection, primarily for non-browser runtimes. */
   isOnline?: () => boolean
@@ -1106,7 +1120,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   )
   const maxMutationsPerBatch = Math.min(
     50,
-    Math.max(1, Math.floor(config.maxMutationsPerBatch ?? 50)),
+    Math.max(1, Math.floor(config.maxMutationsPerBatch ?? 10)),
   )
   const instanceId = randomInstanceId()
   const listeners = new Set<() => void>()
@@ -1141,6 +1155,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   })
   let syncState: NotionSyncState = {
     status: 'idle',
+    progress: null,
     pendingMutations: 0,
     lastSyncedAt: null,
     remoteVersion: null,
@@ -1151,9 +1166,16 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   }
 
   const setSyncState = (patch: Partial<NotionSyncState>) => {
+    const progress =
+      'progress' in patch
+        ? (patch.progress ?? null)
+        : 'status' in patch
+          ? null
+          : syncState.progress
     syncState = {
       ...syncState,
       ...patch,
+      progress,
       pendingMutations: state.outbox.length,
       lastSyncedAt: state.lastSyncedAt,
       remoteVersion: state.remoteVersion ?? null,
@@ -1377,6 +1399,21 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
 
   const flush = async (signal: AbortSignal): Promise<boolean> => {
     let requiresRefresh = false
+    const totalMutations = state.outbox.reduce(
+      (total, entry) => total + entry.batch.mutations.length,
+      0,
+    )
+    let completedMutations = 0
+    if (totalMutations > 0) {
+      setSyncState({
+        progress: {
+          phase: 'push',
+          completedMutations,
+          totalMutations,
+          activeBatchMutations: state.outbox[0]!.batch.mutations.length,
+        },
+      })
+    }
     while (state.outbox.length > 0) {
       const entry = state.outbox[0]!
       let result: NotionMutationResult<TItem>
@@ -1433,6 +1470,15 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
         },
         next,
       )
+      completedMutations += entry.batch.mutations.length
+      setSyncState({
+        progress: {
+          phase: 'push',
+          completedMutations,
+          totalMutations,
+          activeBatchMutations: state.outbox[0]?.batch.mutations.length ?? 0,
+        },
+      })
     }
     return requiresRefresh
   }
@@ -1463,12 +1509,17 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     const seenCursors = new Set<string>()
     let cursor: string | null = null
     let loadedPages = 0
+    let loadedRows = 0
     let remoteVersion: number | undefined
     let remoteWatermark = mode === 'full' ? undefined : state.remoteWatermark
     const targetPages =
       config.syncMode === 'progressive'
         ? Math.max(1, state.pagination?.loadedPages ?? 1)
         : Number.POSITIVE_INFINITY
+
+    setSyncState({
+      progress: { phase: 'pull', loadedPages: 0, loadedRows: 0 },
+    })
 
     do {
       const result = await fetchPage(cursor, signal, editedAfter)
@@ -1493,6 +1544,10 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       }
       for (const row of result.rows) remote.set(config.schema.getKey(row), row)
       loadedPages += 1
+      loadedRows += result.rows.length
+      setSyncState({
+        progress: { phase: 'pull', loadedPages, loadedRows },
+      })
       cursor = result.hasMore ? result.nextCursor : null
       if (cursor) {
         if (seenCursors.has(cursor)) {
@@ -1615,6 +1670,13 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
 
           const cursor = pagination?.nextCursor ?? null
           let result = await fetchPage(cursor, signal)
+          setSyncState({
+            progress: {
+              phase: 'pull',
+              loadedPages: 1,
+              loadedRows: result.rows.length,
+            },
+          })
           if (
             state.remoteVersion !== undefined &&
             result.version !== undefined &&
@@ -1937,7 +1999,10 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
         state = emptyState<TItem>()
         await storage.save(config.id, state)
         applyRows(new Map())
-        setSyncState({ status: online() ? 'idle' : 'offline', error: null })
+        setSyncState({
+          status: online() ? 'idle' : 'offline',
+          error: null,
+        })
       })
       if (online()) await synchronize('full')
     },
@@ -1949,7 +2014,10 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           state = emptyState<TItem>()
           applyRows(new Map())
           broadcast()
-          setSyncState({ status: online() ? 'idle' : 'offline', error: null })
+          setSyncState({
+            status: online() ? 'idle' : 'offline',
+            error: null,
+          })
         }),
       )
       if (online()) await synchronize('full')

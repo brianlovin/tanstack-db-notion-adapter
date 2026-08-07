@@ -119,6 +119,15 @@ export function App() {
     }),
     [allTodos],
   )
+  const progress = sync.progress
+  const syncLabel =
+    progress?.phase === 'push'
+      ? `${progress.completedMutations}/${progress.totalMutations} syncing`
+      : progress?.phase === 'pull'
+        ? `${progress.loadedRows} loaded`
+        : sync.pendingMutations
+          ? `${sync.pendingMutations} pending`
+          : sync.status
 
   return (
     <main>
@@ -129,8 +138,7 @@ export function App() {
           type="button"
           onClick={() => void todoCollection.utils.syncNow().catch(() => undefined)}
         >
-          {sync.status}
-          {sync.pendingMutations ? ` · ${sync.pendingMutations} pending` : ''}
+          {syncLabel}
         </button>
       </header>
 

@@ -163,6 +163,8 @@ lost response can silently lose an acknowledged edit or create a duplicate.
   recovery.
 - [x] Coalesce update and delete identity/conflict reads into the same
   data-source-scoped batch query and reject mismatched client-supplied page IDs.
+- [x] Expose pull and outbox-drain progress, use bounded default client batches,
+  and document redacted per-request telemetry for production measurement.
 - [x] Reject Notion's incomplete 10,000-result response instead of publishing a
   silently truncated collection snapshot.
 - [x] Add webhook-assisted invalidation while retaining polling as recovery.

@@ -47,6 +47,24 @@ values, or page content. Attach request IDs and deployment metadata in the host
 application, and aggregate rates and latency rather than copying user data into
 logs.
 
+```ts
+// src/server/notion-telemetry.ts
+import type { NotionServerEvent } from 'tanstack-db-notion-adapter/server'
+
+const counts = new Map<string, number>()
+
+export function recordNotionEvent(event: NotionServerEvent) {
+  const key = `${event.operation}.${event.outcome}`
+  counts.set(key, (counts.get(key) ?? 0) + 1)
+}
+
+export const getNotionRequestCounts = () => Object.fromEntries(counts)
+```
+
+Pass `recordNotionEvent` as the handler's `onEvent`. The callback is the
+package-to-observability Adapter; storage, aggregation, alerting, request IDs,
+and dashboards remain owned by the host application.
+
 Alert on sustained authorization failures, schema mismatch, outbox age,
 idempotency conflicts, storage quarantine, and Notion error/retry rates. A
 healthy HTTP endpoint alone does not prove that browser outboxes are draining.

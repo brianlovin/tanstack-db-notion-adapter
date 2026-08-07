@@ -44,9 +44,9 @@ collection ready even while offline. During a first eager remote hydration,
 each complete page is added to the visible and durable local bootstrap while
 `lastSyncedAt` remains unset. The final page atomically replaces that additive
 bootstrap with the authoritative complete snapshot. A local transaction is
-normalized, split into at most 50-mutation batches, and committed to durable
-storage before the TanStack mutation handler resolves. The collection's synced
-base state changes only after that commit.
+normalized, split into bounded batches (10 mutations by default, at most 50),
+and committed to durable storage before the TanStack mutation handler resolves.
+The collection's synced base state changes only after that commit.
 
 Synchronization acquires Web Locks or a renewable IndexedDB lease and reloads
 shared storage. The write path flushes the outbox head in FIFO order and applies
@@ -62,6 +62,8 @@ values. Both acknowledgement checkpoints and refreshed snapshots commit with
 an atomic revision comparison before they are published in memory. A stale
 writer retries rather than overwriting newer state. Unknown persisted formats
 move to quarantine; they are never silently replaced by an empty envelope.
+Sync-state progress reports each durable mutation-batch checkpoint and every
+received query page without becoming part of the persisted correctness state.
 
 The server runs each batch and each individual mutation through a durable
 idempotency-store contract. The store is shared across handler instances and

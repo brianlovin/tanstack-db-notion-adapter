@@ -795,6 +795,7 @@ describe('notionCollectionOptions', () => {
     expect(collection.get('bootstrap-two')).toBeUndefined()
     expect(collection.utils.getSyncState()).toMatchObject({
       status: 'syncing',
+      progress: { phase: 'pull', loadedPages: 1, loadedRows: 1 },
       lastSyncedAt: null,
     })
     expect(await storage.load('mutable-bootstrap')).toMatchObject({
@@ -814,6 +815,7 @@ describe('notionCollectionOptions', () => {
 
     expect(collection.get('bootstrap-one')).toBeDefined()
     expect(collection.get('bootstrap-two')).toBeDefined()
+    expect(collection.utils.getSyncState().progress).toBeNull()
     expect(collection.utils.getSyncState().lastSyncedAt).not.toBeNull()
     await collection.cleanup()
   })
@@ -1600,7 +1602,7 @@ describe('notionCollectionOptions', () => {
     await collection.cleanup()
   })
 
-  it('chunks large TanStack transactions into server-safe outbox batches', async () => {
+  it('chunks large TanStack transactions into bounded outbox batches', async () => {
     const storage = createMemoryNotionStorage()
     const collection = createCollection(
       notionCollectionOptions({
@@ -1624,12 +1626,100 @@ describe('notionCollectionOptions', () => {
 
     const persisted = await storage.load('bulk-todos')
     expect(persisted?.rows).toHaveLength(51)
-    expect(persisted?.outbox).toHaveLength(2)
+    expect(persisted?.outbox).toHaveLength(6)
     expect(persisted?.outbox.map((entry) => entry.batch.mutations.length)).toEqual([
-      50, 1,
+      10, 10, 10, 10, 10, 1,
     ])
     expect(new Set(persisted?.outbox.map((entry) => entry.batch.idempotencyKey)).size)
-      .toBe(2)
+      .toBe(6)
+    await collection.cleanup()
+  })
+
+  it('reports mutation progress as bounded batches drain', async () => {
+    const storage = createMemoryNotionStorage()
+    let isOnline = false
+    const sentBatchSizes: Array<number> = []
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          const body = JSON.parse(String(init.body)) as {
+            mutations: Array<{ value: ReturnType<typeof testTodo> }>
+          }
+          sentBatchSizes.push(body.mutations.length)
+          return Response.json({
+            rows: body.mutations.map(({ value }, index) => ({
+              ...value,
+              notionPageId: `progress-page-${sentBatchSizes.length}-${index}`,
+            })),
+            deletedKeys: [],
+          })
+        }
+        return Response.json({ rows: [], hasMore: false, nextCursor: null })
+      },
+    )
+    const collection = createCollection(
+      notionCollectionOptions({
+        id: 'progress-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        isOnline: () => isOnline,
+        autoStart: false,
+        pollIntervalMs: 0,
+      }),
+    )
+    await collection.preload()
+    const transaction = collection.insert(
+      Array.from({ length: 25 }, (_, index) => ({
+        id: `progress-${index}`,
+        title: `Progress ${index}`,
+      })),
+    )
+    await transaction.isPersisted.promise
+
+    const progress: Array<NonNullable<ReturnType<
+      typeof collection.utils.getSyncState
+    >['progress']>> = []
+    const unsubscribe = collection.utils.subscribeSyncState(() => {
+      const current = collection.utils.getSyncState().progress
+      if (current?.phase === 'push') progress.push(current)
+    })
+    isOnline = true
+    await collection.utils.syncNow()
+
+    expect(sentBatchSizes).toEqual([10, 10, 5])
+    expect(progress).toEqual(
+      expect.arrayContaining([
+        {
+          phase: 'push',
+          completedMutations: 0,
+          totalMutations: 25,
+          activeBatchMutations: 10,
+        },
+        {
+          phase: 'push',
+          completedMutations: 10,
+          totalMutations: 25,
+          activeBatchMutations: 10,
+        },
+        {
+          phase: 'push',
+          completedMutations: 20,
+          totalMutations: 25,
+          activeBatchMutations: 5,
+        },
+        {
+          phase: 'push',
+          completedMutations: 25,
+          totalMutations: 25,
+          activeBatchMutations: 0,
+        },
+      ]),
+    )
+    expect(collection.utils.getSyncState().progress).toBeNull()
+
+    unsubscribe()
     await collection.cleanup()
   })
 

@@ -123,6 +123,13 @@ a change. A fully new insert batch or update batch therefore needs at most
 `N + 1` Notion requests rather than `2N`. The query preserves insert duplicate
 prevention, lost-response recovery, and update conflict checks.
 
+Browser collections send 10 mutations per request by default, providing regular
+durable progress checkpoints and limiting how many writes wait behind one slow
+Notion response. Increase `maxMutationsPerBatch` toward 50 to minimize compound
+identity queries during controlled imports; reduce it when faster progress and
+smaller retry units matter more. `getSyncState().progress` exposes completed
+mutations, total mutations, and the active batch size.
+
 Identity queries cover the whole configured data source, even when the handler
 uses a fixed working-set filter. This prevents a row that was remotely moved out
 of the working set from being mistaken for a missing row. The filter controls

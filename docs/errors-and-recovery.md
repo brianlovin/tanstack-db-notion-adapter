@@ -7,7 +7,10 @@ not silently roll it back or delete it.
 ## What the UI should expose
 
 Subscribe to `collection.utils.getSyncState()` and show the storage kind,
-online/offline state, pending count, and current status. Provide controls for:
+online/offline state, pending count, current status, and `progress` while a long
+pull or outbox drain is active. Push progress reports completed and total
+mutations plus the active batch size; pull progress reports received pages and
+rows. Provide controls for:
 
 ```ts
 await collection.utils.getPendingMutations()

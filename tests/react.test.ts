@@ -14,6 +14,7 @@ describe('React bindings', () => {
   it('provides stable server snapshots for sync and page content', () => {
     const syncState: NotionSyncState = {
       status: 'synced',
+      progress: null,
       pendingMutations: 2,
       lastSyncedAt: 123,
       remoteVersion: 1,
