@@ -133,6 +133,11 @@ function requestOperation(
   return 'unknown'
 }
 
+const INITIAL_RETRY_DELAY_MS = 300
+const MAX_RETRY_DELAY_MS = 8_000
+const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 60_000
+const DEFAULT_RATE_LIMIT_JITTER_MS = 15_000
+
 function retryableStatus(status: number): boolean {
   return status === 408 || status === 409 || status === 429 || status >= 500
 }
@@ -151,7 +156,36 @@ function parseRetryAfter(response: Response): number | null {
   const value = response.headers.get('Retry-After')
   if (!value) return null
   const seconds = Number(value)
-  return Number.isFinite(seconds) ? Math.max(0, seconds * 1_000) : null
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000)
+  const date = Date.parse(value)
+  if (!Number.isNaN(date)) return Math.max(0, date - Date.now())
+  return null
+}
+
+export function getRetryDelay(
+  status: number | null,
+  retryAfterMs: number | null,
+  attempt: number,
+  rateLimitCooldownMs = DEFAULT_RATE_LIMIT_COOLDOWN_MS,
+  rateLimitJitterMs = DEFAULT_RATE_LIMIT_JITTER_MS,
+): number {
+  // Notion's rate-limit cooldown is long enough that retrying sooner just burns
+  // the retry budget. Wait the cooldown out, but let a server-suggested delay
+  // extend (never shorten) the wait.
+  if (status === 429) {
+    const cooldown =
+      rateLimitCooldownMs + Math.round(Math.random() * rateLimitJitterMs)
+    if (retryAfterMs == null) return cooldown
+    return Math.max(retryAfterMs, cooldown)
+  }
+
+  if (retryAfterMs != null) return retryAfterMs
+
+  const exponential = Math.min(
+    MAX_RETRY_DELAY_MS,
+    INITIAL_RETRY_DELAY_MS * 2 ** attempt,
+  )
+  return Math.round(exponential * (0.5 + Math.random()))
 }
 
 interface CreateNotionRequesterConfig {
@@ -164,6 +198,8 @@ interface CreateNotionRequesterConfig {
   minimumRequestIntervalMs: number
   requestTimeoutMs: number
   maxRetries: number
+  rateLimitCooldownMs: number
+  rateLimitJitterMs: number
   onEvent?: (event: NotionServerEvent) => void
 }
 
@@ -297,17 +333,23 @@ export function createNotionRequester(
           throw error
         }
 
-        const retryAfter =
+        const status = error instanceof NotionHttpError ? error.status : null
+        const retryAfterMs =
           error instanceof NotionHttpError ? error.retryAfterMs : null
-        const exponential = Math.min(8_000, 300 * 2 ** attempt)
-        const backoff = retryAfter ?? exponential * (0.5 + Math.random())
+        const backoff = getRetryDelay(
+          status,
+          retryAfterMs,
+          attempt,
+          config.rateLimitCooldownMs,
+          config.rateLimitJitterMs,
+        )
         emit({
           type: 'notion_request',
           operation,
           attempt: attempt + 1,
           outcome: 'retry',
           durationMs: Date.now() - startedAt,
-          status: error instanceof NotionHttpError ? error.status : null,
+          status,
           retryInMs: backoff,
         })
         await sleep(backoff, init.signal ?? undefined)

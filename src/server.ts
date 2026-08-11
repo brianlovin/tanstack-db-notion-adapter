@@ -120,6 +120,10 @@ interface NotionSyncHandlerBaseConfig<TFields extends NotionFields> {
   rateLimiter?: NotionRateLimiter
   /** Stable non-secret key identifying the Notion connection to rateLimiter. */
   rateLimitScope?: string
+  /** Base cooldown for 429 retries. Defaults to 60 seconds. */
+  rateLimitCooldownMs?: number
+  /** Random jitter added to the 429 cooldown. Defaults to 15 seconds. */
+  rateLimitJitterMs?: number
   /** Structured telemetry that never includes tokens, request bodies, or content. */
   onEvent?: (event: NotionServerEvent) => void
   /** Shared version store bumped by a verified Notion webhook. */
@@ -643,6 +647,14 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     config.schemaValidationTtlMs ?? 60_000,
   )
   const maxRetries = Math.max(0, Math.floor(config.maxRetries ?? 4))
+  const rateLimitCooldownMs = Math.max(
+    0,
+    config.rateLimitCooldownMs ?? 60_000,
+  )
+  const rateLimitJitterMs = Math.max(
+    0,
+    config.rateLimitJitterMs ?? 15_000,
+  )
   const rateLimiter = config.rateLimiter ?? createMemoryNotionRateLimiter()
   if (config.rateLimiter && !config.rateLimitScope) {
     throw new Error(
@@ -775,6 +787,8 @@ export function createNotionSyncHandler<const TFields extends NotionFields>(
     minimumRequestIntervalMs,
     requestTimeoutMs,
     maxRetries,
+    rateLimitCooldownMs,
+    rateLimitJitterMs,
     ...(config.onEvent ? { onEvent: config.onEvent } : {}),
   })
 

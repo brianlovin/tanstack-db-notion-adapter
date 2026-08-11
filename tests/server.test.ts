@@ -483,7 +483,7 @@ describe('createNotionSyncHandler', () => {
       if (attempts === 1) {
         return Response.json(
           { code: 'rate_limited', message: 'Slow down' },
-          { status: 429, headers: { 'Retry-After': '0' } },
+          { status: 429, headers: { 'Retry-After': '0.05' } },
         )
       }
       return Response.json({ results: [], has_more: false, next_cursor: null })
@@ -498,20 +498,59 @@ describe('createNotionSyncHandler', () => {
       validateSchema: false,
       minimumRequestIntervalMs: 0,
       maxRetries: 1,
+      rateLimitCooldownMs: 0,
+      rateLimitJitterMs: 0,
       onEvent: (event) => events.push(event),
     })
 
     const response = await handler(new Request('http://app.test/api/todos'))
+
     expect(response.status).toBe(200)
     expect(attempts).toBe(2)
     expect(events.map((event) => [event.outcome, event.status])).toEqual([
       ['retry', 429],
       ['success', 200],
     ])
-    expect(events.every((event) => event.operation === 'data_source.query')).toBe(
-      true,
-    )
+    expect(events[0]?.retryInMs).toBe(50)
+    expect(
+      events.every((event) => event.operation === 'data_source.query'),
+    ).toBe(true)
     expect(JSON.stringify(events)).not.toContain('secret')
+  })
+
+  it('waits the rate-limit cooldown when Retry-After is missing', async () => {
+    let attempts = 0
+    const events: Array<NotionServerEvent> = []
+    const fetch = vi.fn(async () => {
+      attempts += 1
+      if (attempts === 1) {
+        return Response.json(
+          { code: 'rate_limited', message: 'Slow down' },
+          { status: 429 },
+        )
+      }
+      return Response.json({ results: [], has_more: false, next_cursor: null })
+    })
+    const handler = createNotionSyncHandler({
+      token: 'secret',
+      dataSourceId: 'source-1',
+      schema: testSchema,
+      fetch: fetch as typeof globalThis.fetch,
+      authorize: () => true,
+      dangerouslyAllowEphemeralIdempotency: true,
+      validateSchema: false,
+      minimumRequestIntervalMs: 0,
+      maxRetries: 1,
+      rateLimitCooldownMs: 50,
+      rateLimitJitterMs: 0,
+      onEvent: (event) => events.push(event),
+    })
+
+    const response = await handler(new Request('http://app.test/api/todos'))
+
+    expect(response.status).toBe(200)
+    expect(attempts).toBe(2)
+    expect(events[0]?.retryInMs).toBe(50)
   })
 
   it('shares one request budget across handler instances', async () => {
@@ -1875,19 +1914,19 @@ describe('createNotionSyncHandler', () => {
       fetch: fetch as typeof globalThis.fetch,
       minimumRequestIntervalMs: 0,
       maxRetries: 1,
+      rateLimitCooldownMs: 0,
+      rateLimitJitterMs: 0,
       authorize: () => true,
       idempotencyStore: createMemoryNotionIdempotencyStore(),
     })
     const row = testTodo({ id: 'rate-limited-create' })
+    const body = JSON.stringify({
+      idempotencyKey: 'rate-limited-create',
+      mutations: [{ type: 'insert', key: row.id, value: row }],
+    })
 
     const response = await handler(
-      new Request('http://app.test/api/todos', {
-        method: 'POST',
-        body: JSON.stringify({
-          idempotencyKey: 'rate-limited-create',
-          mutations: [{ type: 'insert', key: row.id, value: row }],
-        }),
-      }),
+      new Request('http://app.test/api/todos', { method: 'POST', body }),
     )
 
     expect(response.status).toBe(200)
