@@ -1,6 +1,7 @@
 import { createCollection } from '@tanstack/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  clearNotionStorageScope,
   notionCollectionOptions,
 } from '../src/index.js'
 import {
@@ -269,6 +270,96 @@ describe('notionCollectionOptions', () => {
       error: null,
     })
     await collection.cleanup()
+  })
+
+  it('isolates durable rows and pending mutations by immutable storage scope', async () => {
+    const storage = createMemoryNotionStorage()
+    const createScopedCollection = (storageScope: string) =>
+      createCollection(
+        notionCollectionOptions({
+          id: 'scoped-todos',
+          storageScope,
+          endpoint: 'http://app.test/api/todos',
+          schema: testSchema,
+          storage,
+          fetch: vi.fn() as typeof globalThis.fetch,
+          autoStart: false,
+          tuning: { isOnline: () => false, pollIntervalMs: 0 },
+        }),
+      )
+
+    const accountA = createScopedCollection('workspace/a')
+    await accountA.preload()
+    const transaction = accountA.insert({
+      id: 'account-a-only',
+      title: 'Private to account A',
+    })
+    await transaction.isPersisted.promise
+    expect(accountA.get('account-a-only')).toBeDefined()
+    await accountA.cleanup()
+
+    const accountB = createScopedCollection('workspace:b')
+    await accountB.preload()
+    expect(accountB.get('account-a-only')).toBeUndefined()
+    expect(await accountB.utils.getPendingMutations()).toHaveLength(0)
+    await accountB.cleanup()
+
+    const restoredA = createScopedCollection('workspace/a')
+    await restoredA.preload()
+    expect(restoredA.get('account-a-only')?.title).toBe('Private to account A')
+    expect(await restoredA.utils.getPendingMutations()).toHaveLength(1)
+    await restoredA.cleanup()
+  })
+
+  it('explicitly clears only the selected account storage scope', async () => {
+    const storage = createMemoryNotionStorage()
+    const createScopedCollection = (storageScope: string) =>
+      createCollection(
+        notionCollectionOptions({
+          id: 'clear-scoped-todos',
+          storageScope,
+          endpoint: 'http://app.test/api/todos',
+          schema: testSchema,
+          storage,
+          fetch: vi.fn() as typeof globalThis.fetch,
+          autoStart: false,
+          tuning: { isOnline: () => false, pollIntervalMs: 0 },
+        }),
+      )
+    for (const scope of ['account-a', 'account-b']) {
+      const collection = createScopedCollection(scope)
+      await collection.preload()
+      const transaction = collection.insert({
+        id: `${scope}-todo`,
+        title: scope,
+      })
+      await transaction.isPersisted.promise
+      await collection.cleanup()
+    }
+
+    await expect(
+      clearNotionStorageScope({
+        id: 'clear-scoped-todos',
+        storageScope: 'account-a',
+        storage,
+        acceptDataLoss: false,
+      } as never),
+    ).rejects.toMatchObject({ code: 'data_loss_not_accepted' })
+    await clearNotionStorageScope({
+      id: 'clear-scoped-todos',
+      storageScope: 'account-a',
+      storage,
+      acceptDataLoss: true,
+    })
+
+    const clearedA = createScopedCollection('account-a')
+    await clearedA.preload()
+    expect([...clearedA.values()]).toHaveLength(0)
+    await clearedA.cleanup()
+    const retainedB = createScopedCollection('account-b')
+    await retainedB.preload()
+    expect(retainedB.get('account-b-todo')).toBeDefined()
+    await retainedB.cleanup()
   })
 
   it('clears an initial authorization error when sync resumes after login', async () => {

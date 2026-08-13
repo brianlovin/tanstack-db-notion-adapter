@@ -185,6 +185,8 @@ lost response can silently lose an acknowledged edit or create a duplicate.
   developer and personal-workspace workflow.
 - [x] Document cache privacy and provide a custom-storage/encryption hook for
   sensitive sources.
+- [x] Namespace collection rows, outboxes, page content, quarantines, and
+  browser coordination by an immutable account/workspace storage scope.
 - [x] Define offline media behavior because Notion-hosted file URLs expire.
 - [x] Add structured observability hooks without logging content or secrets.
 - [x] Declare `@tanstack/db` as a compatible peer (`^0.6.17`), test against

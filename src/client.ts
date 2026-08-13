@@ -13,6 +13,7 @@ import {
   NotionSyncError,
 } from './browser-sync-runtime.js'
 import {
+  createNotionStorageId,
   createNotionPersistedStateStore,
   NotionPersistedStateError,
 } from './persisted-state.js'
@@ -144,6 +145,8 @@ export interface NotionCollectionConfig<TFields extends NotionFields>
     | 'utils'
   > {
   id: string
+  /** Immutable account/workspace namespace for browser cache, outbox, and locks. */
+  storageScope?: string
   endpoint: string
   schema: NotionSchema<TFields>
   storage?: NotionCollectionStorage
@@ -182,6 +185,13 @@ export interface NotionCollectionTuning {
   coordinationStrategy?: 'auto' | 'storage-lease'
   /** Reconcile when a background tab becomes visible. @default true */
   refreshOnWindowFocus?: boolean
+}
+
+export interface ClearNotionStorageScopeOptions {
+  id: string
+  storageScope: string
+  storage?: NotionCollectionStorage
+  acceptDataLoss: true
 }
 
 export class NotionStorageConflictError extends Error {
@@ -826,6 +836,25 @@ export function createBrowserNotionStorage(
   })
 }
 
+/** Clears one scoped row envelope and its matching page-content envelope. */
+export async function clearNotionStorageScope(
+  options: ClearNotionStorageScopeOptions,
+): Promise<void> {
+  if (options.acceptDataLoss !== true) {
+    throw new NotionSyncError({
+      code: 'data_loss_not_accepted',
+      message: 'Clearing scoped Notion storage requires acceptDataLoss: true.',
+      retryable: false,
+    })
+  }
+  const storage = options.storage ?? createBrowserNotionStorage()
+  const collectionId = createNotionStorageId(options.id, options.storageScope)
+  for (const storageId of [collectionId, `${collectionId}:page-content`]) {
+    await storage.clear(storageId)
+    await storage.clearQuarantine?.(storageId)
+  }
+}
+
 function emptyState<TItem extends object>(): NotionPersistedState<TItem> {
   return { version: 2, revision: 0, rows: [], outbox: [], lastSyncedAt: null }
 }
@@ -1054,9 +1083,10 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   type SyncParams = Parameters<SyncConfig<TItem, string>['sync']>[0]
 
   const storage = config.storage ?? createBrowserNotionStorage()
+  const storageId = createNotionStorageId(config.id, config.storageScope)
   const persistence = createNotionPersistedStateStore<TItem>(
     storage,
-    config.id,
+    storageId,
   )
   const fetcher = config.fetch ?? globalThis.fetch?.bind(globalThis)
   if (!fetcher) throw new Error('A fetch implementation is required.')
@@ -1191,13 +1221,13 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           navigator.locks
         ) {
           return await navigator.locks.request(
-            `tanstack-db-notion:${config.id}`,
+            `tanstack-db-notion:${storageId}`,
             { signal: lifecycle.signal },
             () => operation(lifecycle.signal),
           )
         }
         if (storage.runExclusive) {
-          return await storage.runExclusive(config.id, instanceId, operation, {
+          return await storage.runExclusive(storageId, instanceId, operation, {
             signal: lifecycle.signal,
           })
         }
@@ -1302,7 +1332,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
         storage.quarantine
       ) {
         quarantine = await storage.quarantine(
-          config.id,
+          storageId,
           persisted,
           error.message,
         )
@@ -1821,7 +1851,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
 
       lifecycle.start()
       if (typeof BroadcastChannel !== 'undefined') {
-        channel = new BroadcastChannel(`tanstack-db-notion:${config.id}`)
+        channel = new BroadcastChannel(`tanstack-db-notion:${storageId}`)
         channel.addEventListener('message', (event) => {
           if ((event.data as { source?: string } | null)?.source === instanceId) return
           void exclusive(() =>
@@ -2092,7 +2122,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       await initialization
       await exclusive(() =>
         crossTab(async () => {
-          await storage.clear(config.id)
+          await storage.clear(storageId)
           state = emptyState<TItem>()
           applyRows(new Map())
           broadcast()
@@ -2110,6 +2140,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     endpoint: _endpoint,
     fetch: _fetch,
     storage: _storage,
+    storageScope: _storageScope,
     tuning: _tuning,
     syncMode: _syncMode,
     ...baseConfig

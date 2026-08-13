@@ -1,6 +1,7 @@
 import { createCollection } from '@tanstack/db'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
+  clearNotionStorageScope,
   createNotionPageContentClient,
   notionCollectionOptions,
   type NotionPageContentSnapshot,
@@ -423,6 +424,65 @@ describe('createNotionPageContentClient', () => {
       pending: false,
       status: 'synced',
     })
+    restored.cleanup()
+  })
+
+  it('isolates durable page-content drafts by immutable storage scope', async () => {
+    const storage = createMemoryNotionStorage()
+    const createClient = (storageScope: string) =>
+      createNotionPageContentClient({
+        id: 'scoped-content',
+        storageScope,
+        endpoint: 'http://app.test/api/notes',
+        storage,
+        fetch: vi.fn() as typeof globalThis.fetch,
+        autoStart: false,
+        isOnline: () => false,
+      })
+
+    const accountA = createClient('workspace/a')
+    await accountA.createDraft('account-a-draft', 'Private to account A')
+    accountA.cleanup()
+
+    const accountB = createClient('workspace:b')
+    await accountB.ready()
+    expect(accountB.get('account-a-draft')).toBeUndefined()
+    accountB.cleanup()
+
+    const restoredA = createClient('workspace/a')
+    await restoredA.ready()
+    expect(restoredA.get('account-a-draft')?.markdown).toBe(
+      'Private to account A',
+    )
+    restoredA.cleanup()
+  })
+
+  it('clears the page-content record with its selected storage scope', async () => {
+    const storage = createMemoryNotionStorage()
+    const createClient = () =>
+      createNotionPageContentClient({
+        id: 'clear-scoped-content',
+        storageScope: 'account-a',
+        endpoint: 'http://app.test/api/notes',
+        storage,
+        fetch: vi.fn() as typeof globalThis.fetch,
+        autoStart: false,
+        isOnline: () => false,
+      })
+    const client = createClient()
+    await client.createDraft('private-draft', 'Clear me')
+    client.cleanup()
+
+    await clearNotionStorageScope({
+      id: 'clear-scoped-content',
+      storageScope: 'account-a',
+      storage,
+      acceptDataLoss: true,
+    })
+
+    const restored = createClient()
+    await restored.ready()
+    expect(restored.get('private-draft')).toBeUndefined()
     restored.cleanup()
   })
 

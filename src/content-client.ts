@@ -4,6 +4,7 @@ import {
   NotionSyncError,
 } from './browser-sync-runtime.js'
 import {
+  createNotionStorageId,
   createNotionPersistedStateStore,
   createSerializedQueue,
 } from './persisted-state.js'
@@ -69,6 +70,8 @@ export interface NotionPageContentClientConfig<
   TItem extends object = Record<string, unknown>,
 > {
   id: string
+  /** Immutable account/workspace namespace shared with the row collection. */
+  storageScope?: string
   endpoint: string
   /** Automatically attaches drafts when synced rows receive a Notion page ID. */
   collection?: NotionPageContentCollection<TItem>
@@ -206,7 +209,10 @@ export function createNotionPageContentClient<
   if (!fetcher) throw new Error('A fetch implementation is required.')
 
   const endpoint = config.endpoint.replace(/\/$/, '')
-  const storageId = `${config.id}:page-content`
+  const storageId = `${createNotionStorageId(
+    config.id,
+    config.storageScope,
+  )}:page-content`
   const persistence = createNotionPersistedStateStore<
     NotionPageContentSnapshot
   >(storage, storageId)

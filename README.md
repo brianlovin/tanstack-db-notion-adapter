@@ -128,6 +128,9 @@ Choose the safeguards that fit how your app is deployed:
 - **Surface blocked mutations when users need recovery controls.**
   `tx.isPersisted` means the mutation is durable on this device, not that
   Notion accepted it. See [errors and recovery](docs/errors-and-recovery.md).
+- **Scope browser storage before supporting account switching.** Resolve an
+  opaque stable account/workspace ID before constructing either client, then
+  pass it as `storageScope`. See [authentication](docs/authentication.md).
 
 ## Mutations and recovery
 
