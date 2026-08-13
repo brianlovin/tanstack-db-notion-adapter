@@ -11,6 +11,7 @@ export {
   type NotionPersistedEnvelope,
   type NotionQuarantineRecord,
   type NotionRemotePaginationState,
+  type NotionRemoteTransactionReceipt,
   type NotionStorageLockOptions,
 } from './client.js'
 

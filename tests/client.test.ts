@@ -2177,6 +2177,284 @@ describe('notionCollectionOptions', () => {
     await collection.cleanup()
   })
 
+  it('cancels every never-delivered chunk and durably rolls back its local rows', async () => {
+    const storage = createMemoryNotionStorage()
+    const fetch = vi.fn() as typeof globalThis.fetch
+    const createCollectionInstance = () =>
+      createCollection(
+        notionCollectionOptions({
+          tuning: { isOnline: () => false, pollIntervalMs: 0 },
+          id: 'cancelled-bulk-todos',
+          endpoint: 'http://app.test/api/todos',
+          schema: testSchema,
+          storage,
+          fetch,
+        }),
+      )
+    const collection = createCollectionInstance()
+    await collection.preload()
+    const transaction = collection.insert(
+      Array.from({ length: 25 }, (_, index) => ({
+        id: `cancelled-${index}`,
+        title: `Cancelled ${index}`,
+      })),
+    )
+    await transaction.isPersisted.promise
+
+    await expect(
+      collection.utils.getRemoteTransactionStatus(transaction),
+    ).resolves.toMatchObject({
+      status: 'pending',
+      transactionId: transaction.id,
+      completedChunks: 0,
+      totalChunks: 3,
+      entryIds: expect.arrayContaining([
+        `${transaction.id}:1-of-3`,
+        `${transaction.id}:2-of-3`,
+        `${transaction.id}:3-of-3`,
+      ]),
+    })
+
+    await collection.utils.cancelRemoteTransaction(transaction)
+
+    expect(fetch).not.toHaveBeenCalled()
+    expect([...collection.values()]).toHaveLength(0)
+    expect(await collection.utils.getPendingMutations()).toHaveLength(0)
+    await expect(
+      collection.utils.getRemoteTransactionStatus(transaction),
+    ).resolves.toMatchObject({
+      status: 'cancelled',
+      transactionId: transaction.id,
+      totalChunks: 3,
+    })
+    await collection.cleanup()
+
+    const restored = createCollectionInstance()
+    await restored.preload()
+    expect([...restored.values()]).toHaveLength(0)
+    await expect(
+      restored.utils.getRemoteTransactionStatus(transaction.id),
+    ).resolves.toMatchObject({ status: 'cancelled', totalChunks: 3 })
+    await restored.cleanup()
+  })
+
+  it('rebases later pending full-row updates when an earlier transaction is cancelled', async () => {
+    const storage = createMemoryNotionStorage()
+    const first = testTodo({ id: 'cancel-update-1', title: 'First' })
+    const second = testTodo({ id: 'cancel-update-2', title: 'Second' })
+    await storage.save('cancelled-update-todos', {
+      version: 2,
+      revision: 0,
+      rows: [first, second],
+      outbox: [],
+      lastSyncedAt: null,
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: { isOnline: () => false, pollIntervalMs: 0 },
+        id: 'cancelled-update-todos',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: vi.fn() as typeof globalThis.fetch,
+      }),
+    )
+    await collection.preload()
+    const completion = collection.update([first.id, second.id], (drafts) => {
+      for (const draft of drafts) draft.completed = true
+    })
+    await completion.isPersisted.promise
+    const laterEdit = collection.update(first.id, (draft) => {
+      draft.title = 'Later title'
+    })
+    await laterEdit.isPersisted.promise
+
+    await collection.utils.cancelRemoteTransaction(completion)
+
+    expect(collection.get(first.id)).toMatchObject({
+      title: 'Later title',
+      completed: false,
+    })
+    expect(collection.get(second.id)).toMatchObject({
+      title: 'Second',
+      completed: false,
+    })
+    const [pending] = await collection.utils.getPendingMutations()
+    expect(pending?.id).toBe(laterEdit.id)
+    expect(pending?.batch.mutations[0]).toMatchObject({
+      type: 'update',
+      key: first.id,
+      value: { title: 'Later title', completed: false },
+      base: { title: 'First' },
+      changes: { title: 'Later title' },
+    })
+    await collection.cleanup()
+  })
+
+  it('persists one remote receipt after every bounded chunk is acknowledged', async () => {
+    const storage = createMemoryNotionStorage()
+    let isOnline = false
+    const remote = new Map<string, TestTodo>()
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        const batch = JSON.parse(String(init.body)) as {
+          mutations: Array<{ value: TestTodo }>
+        }
+        const rows = batch.mutations.map(({ value }, index) => ({
+          ...value,
+          notionPageId: `receipt-page-${remote.size + index}`,
+        }))
+        for (const row of rows) remote.set(row.id, row)
+        return Response.json({ rows, deletedKeys: [] })
+      }
+      return Response.json({
+        rows: [...remote.values()],
+        hasMore: false,
+        nextCursor: null,
+      })
+    })
+    const createCollectionInstance = () =>
+      createCollection(
+        notionCollectionOptions({
+          tuning: { isOnline: () => isOnline, pollIntervalMs: 0 },
+          id: 'remote-receipt-todos',
+          endpoint: 'http://app.test/api/todos',
+          schema: testSchema,
+          storage,
+          fetch: fetch as typeof globalThis.fetch,
+          autoStart: false,
+        }),
+      )
+    const collection = createCollectionInstance()
+    await collection.preload()
+    const transaction = collection.insert(
+      Array.from({ length: 25 }, (_, index) => ({
+        id: `receipt-${index}`,
+        title: `Receipt ${index}`,
+      })),
+    )
+
+    const remoteResult = collection.utils.awaitRemote(transaction)
+    await transaction.isPersisted.promise
+    isOnline = true
+    await collection.utils.syncNow()
+    await expect(remoteResult).resolves.toMatchObject({
+      status: 'synced',
+      transactionId: transaction.id,
+      totalChunks: 3,
+    })
+    expect(fetch).toHaveBeenCalledTimes(4)
+    await collection.cleanup()
+
+    isOnline = false
+    const restored = createCollectionInstance()
+    await restored.preload()
+    await expect(
+      restored.utils.getRemoteTransactionStatus(transaction.id),
+    ).resolves.toMatchObject({ status: 'synced', totalChunks: 3 })
+    await restored.cleanup()
+  })
+
+  it('refuses cancellation after delivery starts', async () => {
+    const storage = createMemoryNotionStorage()
+    let isOnline = false
+    let rejectWrite!: (error: Error) => void
+    const fetch = vi.fn(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        if (init?.method === 'POST') {
+          return new Promise<Response>((_resolve, reject) => {
+            rejectWrite = reject
+          })
+        }
+        return Response.json({ rows: [], hasMore: false, nextCursor: null })
+      },
+    )
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: { isOnline: () => isOnline, pollIntervalMs: 0 },
+        id: 'attempted-transaction',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        autoStart: false,
+      }),
+    )
+    await collection.preload()
+    const transaction = collection.insert({
+      id: 'attempted-1',
+      title: 'May have reached Notion',
+    })
+    await transaction.isPersisted.promise
+    isOnline = true
+    const syncing = collection.utils.syncNow()
+    await vi.waitFor(() => expect(rejectWrite).toBeTypeOf('function'))
+    const cancellation = collection.utils.cancelRemoteTransaction(transaction)
+    rejectWrite(new TypeError('The response was lost.'))
+
+    await expect(syncing).rejects.toThrow('The response was lost.')
+    await expect(cancellation).rejects.toMatchObject({
+      code: 'remote_transaction_already_attempted',
+    })
+    await expect(
+      collection.utils.getRemoteTransactionStatus(transaction),
+    ).resolves.toMatchObject({
+      status: 'pending',
+      attempted: true,
+    })
+    expect(collection.get('attempted-1')?.title).toBe('May have reached Notion')
+    await collection.cleanup()
+  })
+
+  it('resolves an exact transaction wait when that transaction becomes blocked', async () => {
+    const storage = createMemoryNotionStorage()
+    let isOnline = false
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        return Response.json(
+          {
+            error: {
+              code: 'schema_mismatch',
+              message: 'The schema changed.',
+              retryable: false,
+            },
+          },
+          { status: 409 },
+        )
+      }
+      return Response.json({ rows: [], hasMore: false, nextCursor: null })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: { isOnline: () => isOnline, pollIntervalMs: 0 },
+        id: 'blocked-transaction-receipt',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+        autoStart: false,
+      }),
+    )
+    await collection.preload()
+    const transaction = collection.insert({
+      id: 'blocked-receipt-1',
+      title: 'Blocked receipt',
+    })
+    await transaction.isPersisted.promise
+    const remoteResult = collection.utils.awaitRemote(transaction)
+    isOnline = true
+
+    await expect(collection.utils.syncNow()).rejects.toMatchObject({
+      code: 'schema_mismatch',
+    })
+    await expect(remoteResult).resolves.toMatchObject({
+      status: 'blocked',
+      transactionId: transaction.id,
+      error: { code: 'schema_mismatch', retryable: false },
+    })
+    await collection.cleanup()
+  })
+
   it('reports mutation progress as bounded batches drain', async () => {
     const storage = createMemoryNotionStorage()
     let isOnline = false

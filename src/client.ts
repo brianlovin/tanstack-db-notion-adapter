@@ -27,6 +27,7 @@ import type {
   NotionPersistedState,
   NotionQuarantineRecord,
   NotionRemotePaginationState,
+  NotionRemoteTransactionReceipt,
   NotionStorageLockOptions,
 } from './persisted-state.js'
 export type {
@@ -38,6 +39,7 @@ export type {
   NotionPersistedState,
   NotionQuarantineRecord,
   NotionRemotePaginationState,
+  NotionRemoteTransactionReceipt,
   NotionStorageLockOptions,
 } from './persisted-state.js'
 export { NotionPersistedStateError } from './persisted-state.js'
@@ -98,6 +100,36 @@ export interface NotionSyncState {
   } | null
 }
 
+export interface NotionTransactionReference {
+  id: string
+  isPersisted?: { promise: Promise<unknown> }
+}
+
+export type NotionRemoteTransactionStatus =
+  | { status: 'unknown'; transactionId: string }
+  | {
+      status: 'pending'
+      transactionId: string
+      entryIds: Array<string>
+      completedChunks: number
+      totalChunks: number
+      attempted: boolean
+    }
+  | {
+      status: 'blocked'
+      transactionId: string
+      entryIds: Array<string>
+      completedChunks: number
+      totalChunks: number
+      error: NotionOutboxError
+    }
+  | ({ status: 'synced' | 'cancelled' } & NotionRemoteTransactionReceipt)
+
+export type NotionRemoteTransactionResult = Exclude<
+  NotionRemoteTransactionStatus,
+  { status: 'unknown' | 'pending' }
+>
+
 export interface NotionCollectionUtils<TItem extends object> extends UtilsRecord {
   /** Enables automatic reconciliation and immediately synchronizes. */
   resumeSync: () => Promise<void>
@@ -112,6 +144,16 @@ export interface NotionCollectionUtils<TItem extends object> extends UtilsRecord
   getPaginationState: () => NotionRemotePaginationState | null
   subscribeSyncState: (listener: () => void) => () => void
   getPendingMutations: () => Promise<Array<NotionOutboxEntry<TItem>>>
+  getRemoteTransactionStatus: (
+    transaction: string | NotionTransactionReference,
+  ) => Promise<NotionRemoteTransactionStatus>
+  awaitRemote: (
+    transaction: string | NotionTransactionReference,
+    options?: { signal?: AbortSignal },
+  ) => Promise<NotionRemoteTransactionResult>
+  cancelRemoteTransaction: (
+    transaction: string | NotionTransactionReference,
+  ) => Promise<void>
   retryPendingMutation: (entryId: string) => Promise<void>
   discardPendingMutation: (
     entryId: string,
@@ -179,6 +221,8 @@ export interface NotionCollectionTuning {
   fullReconciliationIntervalMs?: number
   /** Maximum mutations sent in one server request. Must be between 1 and 50. @default 10 */
   maxMutationsPerBatch?: number
+  /** Terminal remote transaction receipts retained in durable storage. @default 100 */
+  remoteTransactionReceiptLimit?: number
   /** Override browser connectivity detection, primarily for non-browser runtimes. */
   isOnline?: () => boolean
   /** Force the IndexedDB lease path for fallback testing. @default 'auto' */
@@ -856,7 +900,14 @@ export async function clearNotionStorageScope(
 }
 
 function emptyState<TItem extends object>(): NotionPersistedState<TItem> {
-  return { version: 2, revision: 0, rows: [], outbox: [], lastSyncedAt: null }
+  return {
+    version: 2,
+    revision: 0,
+    rows: [],
+    outbox: [],
+    lastSyncedAt: null,
+    remoteTransactionReceipts: [],
+  }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -865,6 +916,26 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function invalidPersistedState(message: string): never {
   throw new NotionPersistedStateError(message)
+}
+
+function outboxChunkIdentity(id: string): {
+  transactionId: string
+  chunkIndex: number
+  chunkCount: number
+} {
+  const chunk = /^(.*):(\d+)-of-(\d+)$/.exec(id)
+  if (!chunk) return { transactionId: id, chunkIndex: 1, chunkCount: 1 }
+  const chunkIndex = Number(chunk[2])
+  const chunkCount = Number(chunk[3])
+  if (
+    !Number.isInteger(chunkIndex) ||
+    !Number.isInteger(chunkCount) ||
+    chunkIndex < 1 ||
+    chunkCount < chunkIndex
+  ) {
+    return { transactionId: id, chunkIndex: 1, chunkCount: 1 }
+  }
+  return { transactionId: chunk[1]!, chunkIndex, chunkCount }
 }
 
 function normalizeOutboxEntry<TItem extends object>(
@@ -883,6 +954,19 @@ function normalizeOutboxEntry<TItem extends object>(
   ) {
     return invalidPersistedState('A persisted outbox entry is missing required fields.')
   }
+  const inferredChunk = outboxChunkIdentity(value.id)
+  const transactionId =
+    typeof value.transactionId === 'string'
+      ? value.transactionId
+      : inferredChunk.transactionId
+  const chunkIndex =
+    Number.isInteger(value.chunkIndex) && Number(value.chunkIndex) >= 1
+      ? Number(value.chunkIndex)
+      : inferredChunk.chunkIndex
+  const chunkCount =
+    Number.isInteger(value.chunkCount) && Number(value.chunkCount) >= chunkIndex
+      ? Number(value.chunkCount)
+      : inferredChunk.chunkCount
 
   const mutations = batch.mutations.map((mutation) => {
     if (
@@ -911,6 +995,9 @@ function normalizeOutboxEntry<TItem extends object>(
 
   return {
     id: value.id,
+    transactionId,
+    chunkIndex,
+    chunkCount,
     createdAt: value.createdAt,
     attempts:
       typeof value.attempts === 'number' && value.attempts >= 0
@@ -946,6 +1033,28 @@ function normalizeOutboxEntry<TItem extends object>(
   }
 }
 
+function normalizeRemoteTransactionReceipt(
+  value: unknown,
+): NotionRemoteTransactionReceipt {
+  if (
+    !isRecord(value) ||
+    typeof value.transactionId !== 'string' ||
+    !['synced', 'cancelled'].includes(String(value.status)) ||
+    typeof value.completedAt !== 'string' ||
+    !Number.isFinite(Date.parse(value.completedAt)) ||
+    !Number.isInteger(value.totalChunks) ||
+    Number(value.totalChunks) < 1
+  ) {
+    return invalidPersistedState('A remote transaction receipt is malformed.')
+  }
+  return {
+    transactionId: value.transactionId,
+    status: value.status as 'synced' | 'cancelled',
+    completedAt: value.completedAt,
+    totalChunks: Number(value.totalChunks),
+  }
+}
+
 function migratePersistedState<TItem extends object>(
   value: NotionPersistedEnvelope<TItem> | null,
 ): { state: NotionPersistedState<TItem>; migrated: boolean } {
@@ -961,6 +1070,15 @@ function migratePersistedState<TItem extends object>(
     (value.lastSyncedAt !== null && typeof value.lastSyncedAt !== 'number')
   ) {
     return invalidPersistedState('The persisted collection envelope is malformed.')
+  }
+  if (
+    value.version === 2 &&
+    value.remoteTransactionReceipts !== undefined &&
+    !Array.isArray(value.remoteTransactionReceipts)
+  ) {
+    return invalidPersistedState(
+      'The persisted remote transaction receipts are malformed.',
+    )
   }
   if (
     value.version === 2 &&
@@ -1051,6 +1169,11 @@ function migratePersistedState<TItem extends object>(
         value.version === 2 && value.pagination !== undefined
           ? (value.pagination as unknown as NotionRemotePaginationState)
           : undefined,
+      remoteTransactionReceipts:
+        value.version === 2 &&
+        Array.isArray(value.remoteTransactionReceipts)
+          ? value.remoteTransactionReceipts.map(normalizeRemoteTransactionReceipt)
+          : [],
     },
     migrated: value.version === 1,
   }
@@ -1109,6 +1232,10 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
   const maxMutationsPerBatch = Math.min(
     50,
     Math.max(1, Math.floor(tuning.maxMutationsPerBatch ?? 10)),
+  )
+  const remoteTransactionReceiptLimit = Math.max(
+    1,
+    Math.floor(tuning.remoteTransactionReceiptLimit ?? 100),
   )
   const instanceId = randomInstanceId()
   const listeners = new Set<() => void>()
@@ -1250,6 +1377,161 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     for (const mutation of mutations) {
       if (mutation.type === 'delete') map.delete(mutation.key)
       else map.set(mutation.key, mutation.value)
+    }
+  }
+
+  const transactionIdForEntry = (entry: NotionOutboxEntry<TItem>) =>
+    entry.transactionId ?? outboxChunkIdentity(entry.id).transactionId
+
+  const chunkCountForEntry = (entry: NotionOutboxEntry<TItem>) =>
+    entry.chunkCount ?? outboxChunkIdentity(entry.id).chunkCount
+
+  const chunkIndexForEntry = (entry: NotionOutboxEntry<TItem>) =>
+    entry.chunkIndex ?? outboxChunkIdentity(entry.id).chunkIndex
+
+  const appendRemoteReceipt = (
+    receipts: ReadonlyArray<NotionRemoteTransactionReceipt> | undefined,
+    receipt: NotionRemoteTransactionReceipt,
+  ) => [
+    ...(receipts ?? []).filter(
+      (candidate) => candidate.transactionId !== receipt.transactionId,
+    ),
+    receipt,
+  ].slice(-remoteTransactionReceiptLimit)
+
+  const remoteTransactionStatus = (
+    transactionId: string,
+  ): NotionRemoteTransactionStatus => {
+    const pending = state.outbox.filter(
+      (entry) => transactionIdForEntry(entry) === transactionId,
+    )
+    if (pending.length > 0) {
+      const totalChunks = Math.max(...pending.map(chunkCountForEntry))
+      const completedChunks = Math.max(
+        0,
+        Math.min(...pending.map(chunkIndexForEntry)) - 1,
+      )
+      const blocked = pending.find(
+        (entry) => entry.lastError?.retryable === false,
+      )
+      if (blocked?.lastError) {
+        return {
+          status: 'blocked',
+          transactionId,
+          entryIds: pending.map((entry) => entry.id),
+          completedChunks,
+          totalChunks,
+          error: clone(blocked.lastError),
+        }
+      }
+      return {
+        status: 'pending',
+        transactionId,
+        entryIds: pending.map((entry) => entry.id),
+        completedChunks,
+        totalChunks,
+        attempted: pending.some(
+          (entry) => entry.attempts > 0 || entry.lastAttemptAt !== null,
+        ),
+      }
+    }
+    const receipt = [...(state.remoteTransactionReceipts ?? [])]
+      .reverse()
+      .find((candidate) => candidate.transactionId === transactionId)
+    return receipt ? clone(receipt) : { status: 'unknown', transactionId }
+  }
+
+  const transactionIdFrom = (
+    transaction: string | NotionTransactionReference,
+  ) => (typeof transaction === 'string' ? transaction : transaction.id)
+
+  const reverseMutationFromMap = (
+    map: Map<string, TItem>,
+    mutation: NotionMutation<TItem>,
+  ) => {
+    if (mutation.type === 'insert') {
+      map.delete(mutation.key)
+      return
+    }
+    if (mutation.type === 'delete') {
+      map.set(mutation.key, clone(mutation.value))
+      return
+    }
+    const current = map.get(mutation.key)
+    if (!current) {
+      throw new NotionSyncError({
+        code: 'remote_transaction_not_cancellable',
+        message: 'The local row state cannot be safely rolled back.',
+        retryable: false,
+      })
+    }
+    map.set(
+      mutation.key,
+      {
+        ...clone(current),
+        ...clone(mutation.base),
+      },
+    )
+  }
+
+  const rebaseOutboxOntoMap = async (
+    map: Map<string, TItem>,
+    entries: Array<NotionOutboxEntry<TItem>>,
+  ) => {
+    for (const entry of entries) {
+      const before = JSON.stringify(entry.batch.mutations)
+      for (const mutation of entry.batch.mutations) {
+        if (mutation.type === 'insert') {
+          map.set(mutation.key, clone(mutation.value))
+          continue
+        }
+        const current = map.get(mutation.key)
+        if (!current) {
+          throw new NotionSyncError({
+            code: 'remote_transaction_not_cancellable',
+            message:
+              'A later pending mutation depends on a row created by this transaction.',
+            retryable: false,
+          })
+        }
+        if (mutation.type === 'delete') {
+          mutation.value = clone(current)
+          map.delete(mutation.key)
+          continue
+        }
+        const base = Object.fromEntries(
+          Object.keys(mutation.changes).map((field) => [
+            field,
+            current[field as keyof TItem],
+          ]),
+        ) as Partial<TItem>
+        const value = {
+          ...clone(current),
+          ...clone(mutation.changes),
+        }
+        const validation = await config.schema['~standard'].validate(value)
+        if ('issues' in validation) {
+          throw new NotionSyncError({
+            code: 'remote_transaction_not_cancellable',
+            message: 'A later pending mutation could not be safely rebased.',
+            retryable: false,
+          })
+        }
+        mutation.base = base
+        mutation.value = validation.value
+        map.set(mutation.key, validation.value)
+      }
+      if (JSON.stringify(entry.batch.mutations) !== before) {
+        if (entry.attempts > 0 || entry.lastAttemptAt !== null) {
+          throw new NotionSyncError({
+            code: 'remote_transaction_not_cancellable',
+            message:
+              'Cancellation would change another transaction that may have reached Notion.',
+            retryable: false,
+          })
+        }
+        entry.batch.idempotencyKey = randomInstanceId()
+      }
     }
   }
 
@@ -1469,12 +1751,24 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       for (const pending of remainingOutbox) {
         applyToMap(next, pending.batch.mutations)
       }
+      const transactionId = transactionIdForEntry(entry)
+      const transactionComplete = !remainingOutbox.some(
+        (pending) => transactionIdForEntry(pending) === transactionId,
+      )
       await commitState(
         {
           ...state,
           rows: [...next.values()],
           outbox: remainingOutbox,
           remoteVersion,
+          remoteTransactionReceipts: transactionComplete
+            ? appendRemoteReceipt(state.remoteTransactionReceipts, {
+                transactionId,
+                status: 'synced',
+                completedAt: new Date().toISOString(),
+                totalChunks: chunkCountForEntry(entry),
+              })
+            : state.remoteTransactionReceipts,
         },
         next,
       )
@@ -1756,6 +2050,9 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
               : `${transactionId}:${index + 1}-of-${chunkCount}`
           entries.push({
             id,
+            transactionId,
+            chunkIndex: index + 1,
+            chunkCount,
             createdAt,
             attempts: 0,
             lastAttemptAt: null,
@@ -1926,6 +2223,125 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     async getPendingMutations() {
       await initialization
       return clone(state.outbox)
+    },
+    async getRemoteTransactionStatus(transaction) {
+      await initialization
+      return remoteTransactionStatus(transactionIdFrom(transaction))
+    },
+    async awaitRemote(transaction, options = {}) {
+      if (typeof transaction !== 'string') {
+        await transaction.isPersisted?.promise
+      }
+      await initialization
+      const transactionId = transactionIdFrom(transaction)
+      const current = remoteTransactionStatus(transactionId)
+      if (current.status === 'unknown') {
+        throw new NotionSyncError({
+          code: 'remote_transaction_not_found',
+          message:
+            'The transaction is not pending and no retained remote receipt was found.',
+          retryable: false,
+        })
+      }
+      if (current.status !== 'pending') return current
+      if (options.signal?.aborted) throw options.signal.reason
+
+      return new Promise<NotionRemoteTransactionResult>((resolve, reject) => {
+        let unsubscribe: () => void = () => undefined
+        const abort = () => {
+          unsubscribe()
+          reject(options.signal?.reason)
+        }
+        const observe = () => {
+          const status = remoteTransactionStatus(transactionId)
+          if (status.status === 'pending' || status.status === 'unknown') return
+          unsubscribe()
+          options.signal?.removeEventListener('abort', abort)
+          resolve(status)
+        }
+        unsubscribe = utils.subscribeSyncState(observe)
+        options.signal?.addEventListener('abort', abort, { once: true })
+        observe()
+      })
+    },
+    async cancelRemoteTransaction(transaction) {
+      if (typeof transaction !== 'string') {
+        await transaction.isPersisted?.promise
+      }
+      await initialization
+      const transactionId = transactionIdFrom(transaction)
+      await exclusive(() =>
+        crossTab(async () => {
+          await reload()
+          const matching = state.outbox.filter(
+            (entry) => transactionIdForEntry(entry) === transactionId,
+          )
+          if (matching.length === 0) {
+            const status = remoteTransactionStatus(transactionId)
+            if (status.status === 'cancelled') return
+            throw new NotionSyncError({
+              code:
+                status.status === 'synced'
+                  ? 'remote_transaction_already_synced'
+                  : 'remote_transaction_not_found',
+              message:
+                status.status === 'synced'
+                  ? 'The transaction was already accepted remotely; enqueue an inverse mutation to undo it.'
+                  : 'No pending transaction or retained receipt was found.',
+              retryable: false,
+            })
+          }
+          const totalChunks = Math.max(...matching.map(chunkCountForEntry))
+          const completeUnattemptedSet =
+            matching.length === totalChunks &&
+            Math.min(...matching.map(chunkIndexForEntry)) === 1
+          if (
+            !completeUnattemptedSet ||
+            matching.some(
+              (entry) => entry.attempts > 0 || entry.lastAttemptAt !== null,
+            )
+          ) {
+            throw new NotionSyncError({
+              code: 'remote_transaction_already_attempted',
+              message:
+                'The transaction may have reached Notion; enqueue an inverse mutation to undo it.',
+              retryable: false,
+            })
+          }
+
+          const base = new Map(
+            state.rows.map((row) => [config.schema.getKey(row), clone(row)]),
+          )
+          for (const entry of [...state.outbox].reverse()) {
+            for (const mutation of [...entry.batch.mutations].reverse()) {
+              reverseMutationFromMap(base, mutation)
+            }
+          }
+          const outbox = clone(
+            state.outbox.filter(
+              (entry) => transactionIdForEntry(entry) !== transactionId,
+            ),
+          )
+          await rebaseOutboxOntoMap(base, outbox)
+          await commitState(
+            {
+              ...state,
+              rows: [...base.values()],
+              outbox,
+              remoteTransactionReceipts: appendRemoteReceipt(
+                state.remoteTransactionReceipts,
+                {
+                  transactionId,
+                  status: 'cancelled',
+                  completedAt: new Date().toISOString(),
+                  totalChunks,
+                },
+              ),
+            },
+            base,
+          )
+        }),
+      )
     },
     async retryPendingMutation(entryId) {
       await initialization

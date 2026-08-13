@@ -30,10 +30,14 @@ export {
   type ClearNotionStorageScopeOptions,
   type NotionOutboxEntry,
   type NotionOutboxError,
+  type NotionRemoteTransactionReceipt,
+  type NotionRemoteTransactionResult,
+  type NotionRemoteTransactionStatus,
   type NotionSyncProgress,
   type NotionSyncIntegrity,
   type NotionSyncState,
   type NotionSyncStatus,
+  type NotionTransactionReference,
 } from './client.js'
 
 export type {

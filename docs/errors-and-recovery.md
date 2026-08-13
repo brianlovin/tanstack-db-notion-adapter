@@ -48,6 +48,42 @@ clears after retry or discard. A mutation's `tx.isPersisted` promise resolves
 when the local durable outbox accepts it; it does not mean Notion accepted the
 write, and server rejection does not roll the transaction back.
 
+## Per-transaction remote receipts
+
+The TanStack transaction ID is also the parent ID for every bounded outbox
+chunk produced by that action. Query or await that exact action after local
+durability:
+
+```ts
+const tx = collection.update(ids, (drafts) => {
+  for (const draft of drafts) draft.completed = true
+})
+await tx.isPersisted.promise
+
+const current = await collection.utils.getRemoteTransactionStatus(tx)
+const result = await collection.utils.awaitRemote(tx, { signal })
+```
+
+Status is `pending`, `blocked`, `synced`, `cancelled`, or `unknown` when an old
+terminal receipt has aged out. Pending bulk status includes entry IDs and
+completed/total chunks. `awaitRemote` resolves for the three terminal/actionable
+states and otherwise waits for normal synchronization; it does not drain ahead
+of older FIFO work. The most recent 100 terminal receipts are kept durably by
+default and the bound can be changed with
+`tuning.remoteTransactionReceiptLimit`.
+
+An undo controller may atomically cancel an action that has never begun remote
+delivery:
+
+```ts
+await collection.utils.cancelRemoteTransaction(tx)
+```
+
+This removes all of its chunks, reconstructs the prior local rows, and rebases
+later unattempted mutations. Once any chunk was attempted, a lost response means
+the write may exist in Notion, so cancellation refuses and the application must
+enqueue a normal inverse mutation.
+
 If the blocked error is `page_not_found`, the row may have been deleted in
 Notion while a local edit was pending. Resolve that head entry either by
 recreating the page from the pending local value or by explicitly discarding

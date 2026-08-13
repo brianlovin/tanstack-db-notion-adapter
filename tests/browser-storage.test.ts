@@ -18,6 +18,9 @@ function persistedState(): NotionPersistedState<StoredTodo> {
     outbox: [
       {
         id: 'transaction-1',
+        transactionId: 'transaction-1',
+        chunkIndex: 1,
+        chunkCount: 1,
         createdAt: '2026-08-03T12:00:00.000Z',
         attempts: 0,
         lastAttemptAt: null,
@@ -35,6 +38,14 @@ function persistedState(): NotionPersistedState<StoredTodo> {
       },
     ],
     lastSyncedAt: null,
+    remoteTransactionReceipts: [
+      {
+        transactionId: 'completed-transaction',
+        status: 'synced',
+        completedAt: '2026-08-03T11:00:00.000Z',
+        totalChunks: 2,
+      },
+    ],
   }
 }
 
