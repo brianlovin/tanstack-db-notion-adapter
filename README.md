@@ -287,6 +287,13 @@ await entryContent.createDraft(id, '# Today')
 entries.insert({ id, title: 'Today' })
 ```
 
+If creation is cancelled, remove the durable local body explicitly. This does
+not change an attached Notion page:
+
+```ts
+await entryContent.discardDraft(id, { acceptDataLoss: true })
+```
+
 The hook watches only the open page. It revalidates that page on window focus
 and every 60 seconds without refetching every page body.
 

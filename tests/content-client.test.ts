@@ -88,6 +88,77 @@ describe('createNotionPageContentClient', () => {
     client.cleanup()
   })
 
+  it('durably discards a local draft only after explicit data-loss acknowledgement', async () => {
+    const storage = createMemoryNotionStorage()
+    const createClient = () =>
+      createNotionPageContentClient({
+        id: 'discarded-draft',
+        endpoint: 'http://app.test/api/notes',
+        storage,
+        autoStart: false,
+        fetch: vi.fn() as typeof globalThis.fetch,
+      })
+    const client = createClient()
+
+    await client.createDraft('draft-1', 'Unsaved private notes')
+    await expect(
+      client.discardDraft('draft-1', {
+        acceptDataLoss: false,
+      } as never),
+    ).rejects.toMatchObject({ code: 'data_loss_not_accepted' })
+    expect(client.get('draft-1')?.markdown).toBe('Unsaved private notes')
+
+    await client.discardDraft('draft-1', { acceptDataLoss: true })
+    expect(client.get('draft-1')).toBeUndefined()
+    client.cleanup()
+
+    const restored = createClient()
+    await restored.ready()
+    expect(restored.get('draft-1')).toBeUndefined()
+    restored.cleanup()
+  })
+
+  it('does not resurrect a discarded draft when an in-flight write finishes', async () => {
+    const storage = createMemoryNotionStorage()
+    let resolveWrite!: (response: Response) => void
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method !== 'POST') return Response.json(content('Original'))
+      return new Promise<Response>((resolve) => {
+        resolveWrite = resolve
+      })
+    })
+    const client = createNotionPageContentClient({
+      id: 'discarded-in-flight-draft',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      autoStart: false,
+      fetch: fetch as typeof globalThis.fetch,
+    })
+
+    await client.load('note-1', 'page-1')
+    await client.update('note-1', 'Discard during delivery')
+    const flush = client.flush('note-1')
+    await vi.waitFor(() => expect(resolveWrite).toBeTypeOf('function'))
+
+    await client.discardDraft('note-1', { acceptDataLoss: true })
+    resolveWrite(Response.json(content('Discard during delivery')))
+    await flush
+
+    expect(client.get('note-1')).toBeUndefined()
+    client.cleanup()
+
+    const restored = createNotionPageContentClient({
+      id: 'discarded-in-flight-draft',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      autoStart: false,
+      fetch: fetch as typeof globalThis.fetch,
+    })
+    await restored.ready()
+    expect(restored.get('note-1')).toBeUndefined()
+    restored.cleanup()
+  })
+
   it('aborts page-content requests at the configured timeout', async () => {
     vi.useFakeTimers()
     const fetch = vi.fn(
