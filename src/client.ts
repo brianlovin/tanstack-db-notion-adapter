@@ -63,6 +63,8 @@ export type NotionSyncStatus =
   | 'offline'
   | 'error'
 
+export type NotionSyncIntegrity = 'unknown' | 'incremental' | 'full'
+
 export type NotionSyncProgress =
   | {
       phase: 'push'
@@ -81,6 +83,9 @@ export interface NotionSyncState {
   progress: NotionSyncProgress | null
   pendingMutations: number
   lastSyncedAt: number | null
+  integrity: NotionSyncIntegrity
+  lastFullReconciledAt: number | null
+  nextFullReconciliationAt: number | null
   remoteVersion: number | null
   isOnline: boolean
   storage: NotionCollectionStorage['kind']
@@ -98,6 +103,8 @@ export interface NotionCollectionUtils<TItem extends object> extends UtilsRecord
   /** Stops automatic remote requests without clearing local rows or pending work. */
   pauseSync: () => void
   syncNow: () => Promise<void>
+  /** Forces an eager integrity snapshot or refreshes the progressive window. */
+  fullReconcileNow: () => Promise<void>
   checkForRemoteChanges: () => Promise<boolean>
   loadMore: () => Promise<void>
   getSyncState: () => NotionSyncState
@@ -959,6 +966,14 @@ function migratePersistedState<TItem extends object>(
   }
   if (
     value.version === 2 &&
+    value.lastSyncMode !== undefined &&
+    value.lastSyncMode !== 'incremental' &&
+    value.lastSyncMode !== 'full'
+  ) {
+    return invalidPersistedState('The persisted sync mode is invalid.')
+  }
+  if (
+    value.version === 2 &&
     value.pagination !== undefined &&
     (!isRecord(value.pagination) ||
       value.pagination.mode !== 'progressive' ||
@@ -989,6 +1004,16 @@ function migratePersistedState<TItem extends object>(
         value.version === 2 && value.lastFullReconciledAt !== undefined
           ? value.lastFullReconciledAt
           : value.lastSyncedAt ?? undefined,
+      lastSyncMode:
+        value.version === 2 && value.lastSyncMode !== undefined
+          ? value.lastSyncMode
+          : value.lastSyncedAt === null
+            ? undefined
+            : value.version === 1 ||
+                value.lastFullReconciledAt === undefined ||
+                value.lastFullReconciledAt >= value.lastSyncedAt
+              ? 'full'
+              : 'incremental',
       remoteVersion:
         value.version === 2 && value.remoteVersion !== undefined
           ? value.remoteVersion
@@ -1091,6 +1116,9 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
     progress: null,
     pendingMutations: 0,
     lastSyncedAt: null,
+    integrity: 'unknown',
+    lastFullReconciledAt: null,
+    nextFullReconciliationAt: null,
     remoteVersion: null,
     isOnline: online(),
     storage: storage.kind,
@@ -1112,6 +1140,20 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       progress,
       pendingMutations: state.outbox.length,
       lastSyncedAt: state.lastSyncedAt,
+      integrity:
+        config.syncMode === 'progressive' || state.lastSyncedAt === null
+          ? 'unknown'
+          : (state.lastSyncMode ?? 'full'),
+      lastFullReconciledAt:
+        config.syncMode === 'progressive'
+          ? null
+          : (state.lastFullReconciledAt ?? null),
+      nextFullReconciliationAt:
+        config.syncMode !== 'progressive' &&
+        fullReconciliationIntervalMs > 0 &&
+        state.lastFullReconciledAt !== undefined
+          ? state.lastFullReconciledAt + fullReconciliationIntervalMs
+          : null,
       remoteVersion: state.remoteVersion ?? null,
       isOnline: online(),
       storage: storage.kind,
@@ -1525,6 +1567,8 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
           mode === 'full' && config.syncMode !== 'progressive'
             ? now
             : state.lastFullReconciledAt,
+        lastSyncMode:
+          config.syncMode === 'progressive' ? undefined : mode,
         remoteVersion: remoteVersion ?? state.remoteVersion,
         pagination:
           config.syncMode === 'progressive'
@@ -1839,6 +1883,7 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
       })
     },
     syncNow: () => synchronize('full'),
+    fullReconcileNow: () => synchronize('full'),
     checkForRemoteChanges,
     loadMore,
     getSyncState: () => syncState,

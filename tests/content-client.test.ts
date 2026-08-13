@@ -233,6 +233,9 @@ describe('createNotionPageContentClient', () => {
             status: 'synced',
             lastSyncedAt: null,
             error: null,
+            editable: true,
+            readOnlyReason: null,
+            conflict: null,
           },
         ],
         lastSyncedAt: null,
@@ -659,14 +662,117 @@ describe('createNotionPageContentClient', () => {
       remoteMarkdown: 'Remote edit',
       pending: true,
       status: 'conflict',
+      editable: false,
+      readOnlyReason: 'page_content_conflict',
+      conflict: {
+        localMarkdown: 'Local draft',
+        remoteMarkdown: 'Remote edit',
+        allowedActions: ['accept-remote', 'overwrite-remote'],
+      },
+    })
+    await expect(
+      client.update('note-1', 'Edit through conflict'),
+    ).rejects.toMatchObject({ code: 'page_content_conflict' })
+    client.cleanup()
+
+    const restored = createNotionPageContentClient({
+      id: 'conflict-notes',
+      endpoint: 'http://app.test/api/notes',
+      storage,
+      fetch: fetch as typeof globalThis.fetch,
+      autoStart: false,
+    })
+    await restored.ready()
+    expect(restored.get('note-1')).toMatchObject({
+      status: 'conflict',
+      editable: false,
+      readOnlyReason: 'page_content_conflict',
+      conflict: {
+        localMarkdown: 'Local draft',
+        remoteMarkdown: 'Remote edit',
+      },
     })
 
-    await client.acceptRemote('note-1')
-    expect(client.get('note-1')).toMatchObject({
+    await restored.acceptRemote('note-1')
+    expect(restored.get('note-1')).toMatchObject({
       markdown: 'Remote edit',
       remoteMarkdown: null,
       pending: false,
       status: 'synced',
+      editable: true,
+      readOnlyReason: null,
+      conflict: null,
+    })
+    restored.cleanup()
+  })
+
+  it('normalizes incomplete Markdown into an explicit read-only capability', async () => {
+    const client = createNotionPageContentClient({
+      id: 'incomplete-content-capability',
+      endpoint: 'http://app.test/api/notes',
+      storage: createMemoryNotionStorage(),
+      autoStart: false,
+      fetch: vi.fn(async () =>
+        Response.json({
+          pageId: 'page-incomplete',
+          markdown: 'Supported prefix\n\n<unknown block="callout-1" />',
+          truncated: true,
+          unknownBlockIds: ['callout-1'],
+        }),
+      ) as typeof globalThis.fetch,
+    })
+
+    const snapshot = await client.load('incomplete', 'page-incomplete')
+
+    expect(snapshot).toMatchObject({
+      editable: false,
+      readOnlyReason: 'page_content_incomplete',
+      conflict: null,
+    })
+    await expect(client.update('incomplete', 'Destructive replacement')).rejects
+      .toMatchObject({ code: 'page_content_incomplete' })
+    client.cleanup()
+  })
+
+  it('keeps a conflict read-only when the remote body cannot be recovered', async () => {
+    let reads = 0
+    const client = createNotionPageContentClient({
+      id: 'unresolved-content-conflict',
+      endpoint: 'http://app.test/api/notes',
+      storage: createMemoryNotionStorage(),
+      debounceMs: 60_000,
+      fetch: vi.fn(async (_input, init) => {
+        if (init?.method === 'POST') {
+          return Response.json(
+            {
+              error: {
+                code: 'page_content_conflict',
+                message: 'The page changed in Notion.',
+                retryable: false,
+              },
+            },
+            { status: 409 },
+          )
+        }
+        reads += 1
+        if (reads === 1) return Response.json(content('Original'))
+        throw new TypeError('Network unavailable during conflict refresh')
+      }) as typeof globalThis.fetch,
+    })
+
+    await client.load('note-1', 'page-1')
+    await client.update('note-1', 'Local draft')
+    await expect(client.flush('note-1')).rejects.toMatchObject({
+      code: 'page_content_conflict',
+    })
+    expect(client.get('note-1')).toMatchObject({
+      status: 'conflict',
+      editable: false,
+      readOnlyReason: 'page_content_conflict',
+      conflict: null,
+    })
+    await expect(client.update('note-1', 'Unsafe edit')).rejects.toMatchObject({
+      code: 'page_content_conflict',
     })
     client.cleanup()
   })

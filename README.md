@@ -179,6 +179,12 @@ the outbox. Transient failures remain retryable and do not populate this
 field. See [errors and recovery](docs/errors-and-recovery.md) for conflict
 handling and durable recovery.
 
+Sync state also reports `integrity`, `lastFullReconciledAt`, and
+`nextFullReconciliationAt`. Incremental polling finds edited rows but cannot
+prove that remotely deleted or newly filtered-out rows are gone. Call
+`collection.utils.fullReconcileNow()` when the UI needs an explicit integrity
+refresh; `syncNow()` remains a compatible alias for a full reconciliation.
+
 When a row was deleted remotely while its local update was pending, resolve the
 blocked head without throwing away the edit:
 

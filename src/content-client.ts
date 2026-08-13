@@ -24,6 +24,16 @@ export type NotionPageContentStatus =
   | 'conflict'
   | 'error'
 
+export type NotionPageContentReadOnlyReason =
+  | 'page_content_incomplete'
+  | 'page_content_conflict'
+
+export interface NotionPageContentConflict {
+  localMarkdown: string
+  remoteMarkdown: string
+  allowedActions: ['accept-remote', 'overwrite-remote']
+}
+
 export interface NotionPageContentSnapshot {
   /** Stable local key, normally the row's `notion.id()` value. */
   key: string
@@ -39,6 +49,9 @@ export interface NotionPageContentSnapshot {
   status: NotionPageContentStatus
   lastSyncedAt: number | null
   error: string | null
+  editable: boolean
+  readOnlyReason: NotionPageContentReadOnlyReason | null
+  conflict: NotionPageContentConflict | null
 }
 
 export interface NotionPageContentCollection<TItem extends object> {
@@ -108,6 +121,48 @@ function clone<T>(value: T): T {
   return typeof globalThis.structuredClone === 'function'
     ? globalThis.structuredClone(value)
     : (JSON.parse(JSON.stringify(value)) as T)
+}
+
+type NotionPageContentSnapshotRecord = Omit<
+  NotionPageContentSnapshot,
+  'editable' | 'readOnlyReason' | 'conflict'
+> &
+  Partial<
+    Pick<
+      NotionPageContentSnapshot,
+      'editable' | 'readOnlyReason' | 'conflict'
+    >
+  >
+
+function withContentCapabilities(
+  value: NotionPageContentSnapshotRecord,
+): NotionPageContentSnapshot {
+  const incomplete =
+    value.truncated ||
+    value.unknownBlockIds.length > 0 ||
+    value.markdown.includes('<unknown ')
+  const conflict =
+    value.remoteMarkdown === null
+      ? null
+      : {
+          localMarkdown: value.markdown,
+          remoteMarkdown: value.remoteMarkdown,
+          allowedActions: [
+            'accept-remote',
+            'overwrite-remote',
+          ] as NotionPageContentConflict['allowedActions'],
+        }
+  const readOnlyReason: NotionPageContentReadOnlyReason | null = incomplete
+    ? 'page_content_incomplete'
+    : conflict || value.status === 'conflict'
+      ? 'page_content_conflict'
+      : null
+  return {
+    ...value,
+    editable: readOnlyReason === null,
+    readOnlyReason,
+    conflict,
+  }
 }
 
 function emptyPersistedState(): NotionPersistedState<NotionPageContentSnapshot> {
@@ -210,7 +265,9 @@ export function createNotionPageContentClient<
 
   const persist = async (next: Map<string, NotionPageContentSnapshot>) => {
     const previous = records
-    let desired = next
+    let desired = new Map(
+      [...next].map(([key, value]) => [key, withContentCapabilities(value)]),
+    )
     try {
       await persistence.compareAndSetWithRetry(
         () => {
@@ -233,7 +290,9 @@ export function createNotionPageContentClient<
         async (persisted) => {
           const reloaded = new Map<string, NotionPageContentSnapshot>()
           for (const value of persisted?.rows ?? []) {
-            if (isSnapshot(value)) reloaded.set(value.key, value)
+            if (isSnapshot(value)) {
+              reloaded.set(value.key, withContentCapabilities(value))
+            }
           }
           const merged = new Map(reloaded)
           for (const [key, value] of previous) {
@@ -278,18 +337,26 @@ export function createNotionPageContentClient<
           retryable: false,
         })
       }
+      const remoteMarkdown =
+        typeof value.remoteMarkdown === 'string' ? value.remoteMarkdown : null
       let status: NotionPageContentStatus = 'idle'
-      if (value.pending) status = online() ? 'saved-local' : 'offline'
-      next.set(value.key, {
-        ...value,
-        remoteMarkdown:
-          typeof value.remoteMarkdown === 'string' ? value.remoteMarkdown : null,
-        unknownBlockIds: value.unknownBlockIds.filter(
-          (id): id is string => typeof id === 'string',
-        ),
-        status,
-        error: null,
-      })
+      if (remoteMarkdown !== null || value.status === 'conflict') {
+        status = 'conflict'
+      } else if (value.pending) {
+        status = online() ? 'saved-local' : 'offline'
+      }
+      next.set(
+        value.key,
+        withContentCapabilities({
+          ...value,
+          remoteMarkdown,
+          unknownBlockIds: value.unknownBlockIds.filter(
+            (id): id is string => typeof id === 'string',
+          ),
+          status,
+          error: null,
+        }),
+      )
     }
     records = next
     if (persisted.version === 1) await persist(next)
@@ -380,7 +447,7 @@ export function createNotionPageContentClient<
       const current = records.get(key)
       let nextRecord: NotionPageContentSnapshot
       if (!current || !current.pending) {
-        nextRecord = {
+        nextRecord = withContentCapabilities({
           key,
           notionPageId,
           markdown: remote.markdown,
@@ -393,9 +460,9 @@ export function createNotionPageContentClient<
           status: 'synced',
           lastSyncedAt: Date.now(),
           error: null,
-        }
+        })
       } else if (current.markdown === remote.markdown) {
-        nextRecord = {
+        nextRecord = withContentCapabilities({
           ...current,
           notionPageId,
           baseMarkdown: remote.markdown,
@@ -406,18 +473,18 @@ export function createNotionPageContentClient<
           status: 'synced',
           lastSyncedAt: Date.now(),
           error: null,
-        }
+        })
       } else if (current.baseMarkdown === remote.markdown) {
-        nextRecord = {
+        nextRecord = withContentCapabilities({
           ...current,
           notionPageId,
           truncated: remote.truncated,
           unknownBlockIds: remote.unknownBlockIds,
           status: online() ? 'saved-local' : 'offline',
           error: null,
-        }
+        })
       } else {
-        nextRecord = {
+        nextRecord = withContentCapabilities({
           ...current,
           notionPageId,
           remoteMarkdown: remote.markdown,
@@ -425,7 +492,7 @@ export function createNotionPageContentClient<
           unknownBlockIds: remote.unknownBlockIds,
           status: 'conflict',
           error: 'This page changed in Notion while a local draft was pending.',
-        }
+        })
       }
       const next = new Map(records)
       next.set(key, nextRecord)
@@ -498,11 +565,15 @@ export function createNotionPageContentClient<
         ) {
           status = 'conflict'
         }
-        next.set(key, {
-          ...latest,
-          status,
-          error: error instanceof Error ? error.message : 'Content sync failed.',
-        })
+        next.set(
+          key,
+          withContentCapabilities({
+            ...latest,
+            status,
+            error:
+              error instanceof Error ? error.message : 'Content sync failed.',
+          }),
+        )
         await persist(next)
       })
       throw error
@@ -516,18 +587,21 @@ export function createNotionPageContentClient<
       if (!latest) return
       const next = new Map(records)
       if (latest.revision === revision) {
-        next.set(key, {
-          ...latest,
-          markdown: remote.markdown,
-          baseMarkdown: remote.markdown,
-          remoteMarkdown: null,
-          pending: false,
-          truncated: remote.truncated,
-          unknownBlockIds: remote.unknownBlockIds,
-          status: 'synced',
-          lastSyncedAt: Date.now(),
-          error: null,
-        })
+        next.set(
+          key,
+          withContentCapabilities({
+            ...latest,
+            markdown: remote.markdown,
+            baseMarkdown: remote.markdown,
+            remoteMarkdown: null,
+            pending: false,
+            truncated: remote.truncated,
+            unknownBlockIds: remote.unknownBlockIds,
+            status: 'synced',
+            lastSyncedAt: Date.now(),
+            error: null,
+          }),
+        )
       } else {
         shouldSchedule = true
         next.set(key, {
@@ -596,20 +670,23 @@ export function createNotionPageContentClient<
       await exclusive(async () => {
         if (records.has(key)) return
         const next = new Map(records)
-        next.set(key, {
+        next.set(
           key,
-          notionPageId: null,
-          markdown: initialMarkdown,
-          baseMarkdown: '',
-          remoteMarkdown: null,
-          revision: initialMarkdown ? 1 : 0,
-          pending: initialMarkdown.length > 0,
-          truncated: false,
-          unknownBlockIds: [],
-          status: online() ? 'saved-local' : 'offline',
-          lastSyncedAt: null,
-          error: null,
-        })
+          withContentCapabilities({
+            key,
+            notionPageId: null,
+            markdown: initialMarkdown,
+            baseMarkdown: '',
+            remoteMarkdown: null,
+            revision: initialMarkdown ? 1 : 0,
+            pending: initialMarkdown.length > 0,
+            truncated: false,
+            unknownBlockIds: [],
+            status: online() ? 'saved-local' : 'offline',
+            lastSyncedAt: null,
+            error: null,
+          }),
+        )
         await persist(next)
       })
       await attachAvailablePages()
@@ -637,20 +714,23 @@ export function createNotionPageContentClient<
         const current = records.get(key)
         if (!current || !current.pending) {
           const next = new Map(records)
-          next.set(key, {
+          next.set(
             key,
-            notionPageId,
-            markdown: current?.markdown ?? '',
-            baseMarkdown: current?.baseMarkdown ?? '',
-            remoteMarkdown: current?.remoteMarkdown ?? null,
-            revision: current?.revision ?? 0,
-            pending: current?.pending ?? false,
-            truncated: current?.truncated ?? false,
-            unknownBlockIds: current?.unknownBlockIds ?? [],
-            status: 'loading',
-            lastSyncedAt: current?.lastSyncedAt ?? null,
-            error: null,
-          })
+            withContentCapabilities({
+              key,
+              notionPageId,
+              markdown: current?.markdown ?? '',
+              baseMarkdown: current?.baseMarkdown ?? '',
+              remoteMarkdown: current?.remoteMarkdown ?? null,
+              revision: current?.revision ?? 0,
+              pending: current?.pending ?? false,
+              truncated: current?.truncated ?? false,
+              unknownBlockIds: current?.unknownBlockIds ?? [],
+              status: 'loading',
+              lastSyncedAt: current?.lastSyncedAt ?? null,
+              error: null,
+            }),
+          )
           await persist(next)
         }
       })
@@ -720,15 +800,13 @@ export function createNotionPageContentClient<
             retryable: false,
           })
         }
-        if (
-          current.truncated ||
-          current.unknownBlockIds.length > 0 ||
-          current.markdown.includes('<unknown ')
-        ) {
+        if (!current.editable) {
           throw new NotionSyncError({
-            code: 'page_content_incomplete',
+            code: current.readOnlyReason ?? 'page_content_incomplete',
             message:
-              'This page contains content that cannot be edited safely as markdown.',
+              current.readOnlyReason === 'page_content_conflict'
+                ? 'Resolve the page-content conflict before editing.'
+                : 'This page contains content that cannot be edited safely as markdown.',
             retryable: false,
           })
         }

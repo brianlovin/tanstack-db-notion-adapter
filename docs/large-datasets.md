@@ -96,8 +96,15 @@ snapshot would weaken deletion and conflict guarantees.
   and safely merged rather than skipped.
 - A complete snapshot runs at most hourly by default to reconcile deletions,
   missed webhook events, and rows that stopped matching a fixed filter. Set
-  `tuning.fullReconciliationIntervalMs: 0` to run it only through `syncNow()`, or use a
-  longer interval when stale deletions are acceptable.
+  `tuning.fullReconciliationIntervalMs: 0` to run it only through
+  `fullReconcileNow()` (`syncNow()` is a compatible alias), or use a longer
+  interval when stale deletions are acceptable.
+- For eager collections, `getSyncState()` exposes `integrity`,
+  `lastFullReconciledAt`, and
+  `nextFullReconciliationAt`. `integrity: 'incremental'` means edited rows are
+  current as of the latest catch-up, while deletion and filter-membership
+  integrity is only as recent as `lastFullReconciledAt`. Progressive windows
+  report `integrity: 'unknown'` because they are intentionally incomplete.
 - For sources with thousands of rows, prefer webhook invalidation, lengthen the
   polling interval, or set `tuning.pollIntervalMs: 0` when the application owns another
   refresh trigger.

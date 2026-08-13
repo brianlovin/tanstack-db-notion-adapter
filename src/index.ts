@@ -29,6 +29,7 @@ export {
   type NotionOutboxEntry,
   type NotionOutboxError,
   type NotionSyncProgress,
+  type NotionSyncIntegrity,
   type NotionSyncState,
   type NotionSyncStatus,
 } from './client.js'
@@ -42,6 +43,8 @@ export {
   type NotionPageContentClient,
   type NotionPageContentClientConfig,
   type NotionPageContentCollection,
+  type NotionPageContentConflict,
+  type NotionPageContentReadOnlyReason,
   type NotionPageContentSnapshot,
   type NotionPageContentStatus,
 } from './content-client.js'

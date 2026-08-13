@@ -102,6 +102,25 @@ the local draft changed, the client retains both versions and reports
 `status: 'conflict'`. Resolve explicitly with `acceptRemote(key)` or
 `overwriteRemote(key, { acceptDataLoss: true })`.
 
+Editor UIs should use the normalized capability fields rather than rebuilding
+the safety rules from lower-level snapshot data:
+
+```tsx
+const content = useNotionPageContent(noteContent, note.id)
+
+<textarea disabled={!content?.editable} value={content?.markdown ?? ''} />
+
+if (content?.readOnlyReason === 'page_content_conflict') {
+  // content.conflict contains localMarkdown, remoteMarkdown, and allowedActions.
+}
+```
+
+`readOnlyReason` is `page_content_incomplete` when enhanced Markdown contains
+truncated or unsupported blocks, and `page_content_conflict` when local and
+remote bodies both changed. `update()` enforces the same capability and refuses
+unsafe replacement until the app accepts the remote body or explicitly
+overwrites it.
+
 For authenticated apps, set `autoStart: false`, then call `resumeSync()` after
 session restoration and `pauseSync()` before logout. Cached content remains
 available while remote requests are paused.
