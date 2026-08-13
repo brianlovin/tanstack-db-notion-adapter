@@ -804,6 +804,7 @@ describe('notionCollectionOptions', () => {
       outbox: [],
       lastSyncedAt: Date.now(),
       lastFullReconciledAt: Date.now(),
+      lastSyncMode: 'full',
       remoteWatermark: watermark,
       remoteVersion: 0,
     })
@@ -854,6 +855,12 @@ describe('notionCollectionOptions', () => {
     )
 
     await collection.preload()
+    const initialIntegrity = collection.utils.getSyncState()
+    expect(initialIntegrity).toMatchObject({
+      integrity: 'full',
+      lastFullReconciledAt: expect.any(Number),
+      nextFullReconciliationAt: expect.any(Number),
+    })
     expect(await collection.utils.checkForRemoteChanges()).toBe(true)
 
     expect(listUrls).toHaveLength(1)
@@ -861,15 +868,29 @@ describe('notionCollectionOptions', () => {
     expect(collection.get('unchanged')?.title).toBe('Keep unchanged')
     expect(collection.get('changed')?.title).toBe('Fetched incrementally')
     expect(collection.get('deleted-remotely')).toBeDefined()
+    expect(collection.utils.getSyncState()).toMatchObject({
+      integrity: 'incremental',
+      lastFullReconciledAt: initialIntegrity.lastFullReconciledAt,
+      nextFullReconciliationAt: initialIntegrity.nextFullReconciliationAt,
+    })
+    expect(await storage.load('incremental-todos')).toMatchObject({
+      lastSyncMode: 'incremental',
+    })
 
-    await collection.utils.syncNow()
+    await collection.utils.fullReconcileNow()
 
     expect(listUrls).toHaveLength(2)
     expect(listUrls[1]?.searchParams.has('editedAfter')).toBe(false)
     expect(collection.get('deleted-remotely')).toBeUndefined()
+    expect(collection.utils.getSyncState()).toMatchObject({
+      integrity: 'full',
+      lastFullReconciledAt: expect.any(Number),
+      nextFullReconciliationAt: expect.any(Number),
+    })
     expect(await storage.load('incremental-todos')).toMatchObject({
       remoteWatermark: changed.updatedAt,
       remoteVersion: 1,
+      lastSyncMode: 'full',
     })
     await collection.cleanup()
   })
@@ -1218,6 +1239,11 @@ describe('notionCollectionOptions', () => {
       nextCursor: 'cursor-2',
       hasMore: true,
     })
+    expect(collection.utils.getSyncState()).toMatchObject({
+      integrity: 'unknown',
+      lastFullReconciledAt: null,
+      nextFullReconciliationAt: null,
+    })
 
     await collection.utils.loadMore()
     expect(fetch).toHaveBeenCalledTimes(2)
@@ -1250,6 +1276,11 @@ describe('notionCollectionOptions', () => {
     expect(offlineCollection.get('progressive-one')?.title).toBe('First page')
     expect(offlineCollection.get('progressive-two')?.title).toBe('Second page')
     expect(offlineCollection.utils.getPaginationState()?.loadedPages).toBe(2)
+    expect(offlineCollection.utils.getSyncState()).toMatchObject({
+      integrity: 'unknown',
+      lastFullReconciledAt: null,
+      nextFullReconciliationAt: null,
+    })
     expect(fetch).toHaveBeenCalledTimes(2)
     await offlineCollection.cleanup()
   })

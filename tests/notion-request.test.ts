@@ -1,7 +1,19 @@
 import { describe, expect, it, vi } from 'vitest'
-import { getRetryDelay } from '../src/notion-request.js'
+import { getRetryDelay, parseRetryAfter } from '../src/notion-request.js'
 
 describe('getRetryDelay', () => {
+  it('parses an HTTP-date Retry-After relative to the current time', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(
+      Date.parse('2026-08-12T12:00:00.000Z'),
+    )
+    const response = new Response(null, {
+      headers: { 'Retry-After': 'Wed, 12 Aug 2026 12:01:30 GMT' },
+    })
+
+    expect(parseRetryAfter(response)).toBe(90_000)
+    vi.restoreAllMocks()
+  })
+
   it('uses Retry-After for non-rate-limit errors', () => {
     expect(getRetryDelay(503, 2_000, 0)).toBe(2_000)
   })

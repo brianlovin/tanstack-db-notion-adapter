@@ -50,8 +50,7 @@ function NoteEditor({ note, content, error, onError }: NoteEditorProps) {
   const readOnly =
     !content ||
     content.status === 'loading' ||
-    content.truncated ||
-    content.unknownBlockIds.length > 0
+    !content.editable
 
   function saveTitle(): void {
     const value = title.trim() || 'Untitled'
@@ -110,18 +109,32 @@ function NoteEditor({ note, content, error, onError }: NoteEditorProps) {
         </label>
       </div>
 
-      {content?.status === 'conflict' ? (
+      {content?.readOnlyReason === 'page_content_conflict' ? (
         <div className="notice" role="alert">
           <span>Notion has another version.</span>
-          <button type="button" onClick={() => void noteContent.acceptRemote(note.id)}>
-            Use Notion
-          </button>
-          <button
-            type="button"
-            onClick={() => void noteContent.overwriteRemote(note.id, { acceptDataLoss: true })}
-          >
-            Keep mine
-          </button>
+          {content.conflict ? (
+            <>
+              <button type="button" onClick={() => void noteContent.acceptRemote(note.id)}>
+                Use Notion
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  void noteContent.overwriteRemote(note.id, {
+                    acceptDataLoss: true,
+                  })
+                }
+              >
+                Keep mine
+              </button>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+      {content?.readOnlyReason === 'page_content_incomplete' ? (
+        <div className="notice" role="alert">
+          This page contains Notion blocks that this Markdown editor cannot safely
+          replace.
         </div>
       ) : null}
       {error ? <p className="error">{error}</p> : null}

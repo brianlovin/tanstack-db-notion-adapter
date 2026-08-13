@@ -152,7 +152,7 @@ function canRetryNotionRequest(
   return error instanceof NotionHttpError && error.status === 429
 }
 
-function parseRetryAfter(response: Response): number | null {
+export function parseRetryAfter(response: Response): number | null {
   const value = response.headers.get('Retry-After')
   if (!value) return null
   const seconds = Number(value)

@@ -234,6 +234,10 @@ integration gaps:
 - [x] Revalidate only actively watched page bodies on focus, a conservative
   timer, or webhook invalidation so direct Notion edits appear without an N+1
   content crawl.
+- [x] Expose normalized page-content editability, read-only reasons, and
+  conflict choices so editors do not have to reconstruct safety rules.
+- [x] Surface incremental versus full reconciliation freshness and provide an
+  explicit `fullReconcileNow()` operation.
 
 ## Test program
 

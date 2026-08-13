@@ -55,6 +55,7 @@ export interface NotionPersistedState<TItem extends object> {
   lastSyncedAt: number | null
   remoteWatermark?: string | undefined
   lastFullReconciledAt?: number | undefined
+  lastSyncMode?: 'incremental' | 'full' | undefined
   remoteVersion?: number | undefined
   pagination?: NotionRemotePaginationState | undefined
 }
