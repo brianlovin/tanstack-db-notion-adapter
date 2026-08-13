@@ -2053,6 +2053,13 @@ describe('createNotionSyncHandler', () => {
             {
               type: 'update',
               key: original.id,
+              value: { ...afterMerge, priority: 'High' },
+              base: { priority: 'Low' },
+              changes: { priority: 'High' },
+            },
+            {
+              type: 'update',
+              key: original.id,
               value: { ...afterMerge, title: 'Second local title' },
               base: { title: 'Local title' },
               changes: { title: 'Second local title' },
@@ -2067,6 +2074,8 @@ describe('createNotionSyncHandler', () => {
       code: 'property_conflict',
       conflicts: [
         {
+          key: original.id,
+          mutationIndex: 1,
           field: 'title',
           baseValue: 'Local title',
           localValue: 'Second local title',
@@ -2077,6 +2086,7 @@ describe('createNotionSyncHandler', () => {
     expect(testSchema.parsePage(notion.pages.get(pageId)!).title).toBe(
       'Remote title',
     )
+    expect(testSchema.parsePage(notion.pages.get(pageId)!).priority).toBe('High')
   })
 
   it('returns a useful error for a mismatched data source', async () => {

@@ -99,6 +99,8 @@ resource use.
 - [x] Specify conflict behavior. Updates serialize changed properties only,
   merge unrelated remote edits, and reject overlapping fields with structured
   base/local/remote values.
+- [x] Resolve property conflicts by row and field under the collection lock,
+  rebase later pending values, and preserve partially applied batch work.
 - [x] Add multi-tab, lost-response, concurrent-insert, poison-entry, and FIFO
   regression tests.
 - [x] Persist transaction-level remote receipts across bounded chunks and allow

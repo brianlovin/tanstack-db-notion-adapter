@@ -1637,6 +1637,8 @@ describe('notionCollectionOptions', () => {
             retryable: false,
             conflicts: [
               {
+                key: 'conflict-1',
+                mutationIndex: 0,
                 field: 'title',
                 baseValue: 'Original',
                 localValue: 'Local',
@@ -1670,12 +1672,336 @@ describe('notionCollectionOptions', () => {
 
     await expect(collection.utils.syncNow()).rejects.toMatchObject({
       code: 'property_conflict',
-      conflicts: [{ field: 'title' }],
+      conflicts: [{ key: 'conflict-1', mutationIndex: 0, field: 'title' }],
     })
     expect((await collection.utils.getPendingMutations())[0]?.lastError).toMatchObject({
       code: 'property_conflict',
-      conflicts: [{ field: 'title', remoteValue: 'Remote' }],
+      conflicts: [
+        {
+          key: 'conflict-1',
+          mutationIndex: 0,
+          field: 'title',
+          remoteValue: 'Remote',
+        },
+      ],
     })
+    const [blocked] = await collection.utils.getPendingMutations()
+    isOnline = false
+    await collection.utils.resolvePropertyConflict(blocked!.id, {
+      action: 'accept-remote',
+      acceptDataLoss: true,
+    })
+    expect(collection.get('conflict-1')?.title).toBe('Remote')
+    expect(await collection.utils.awaitRemote(transaction)).toMatchObject({
+      status: 'synced',
+      transactionId: transaction.id,
+      totalChunks: 1,
+    })
+    await collection.cleanup()
+  })
+
+  it('keeps local conflict values and resumes synchronization without a reload', async () => {
+    const storage = createMemoryNotionStorage()
+    const original = testTodo({ id: 'keep-local', title: 'Original' })
+    await storage.save('keep-local-conflict', {
+      version: 2,
+      revision: 0,
+      rows: [original],
+      outbox: [],
+      lastSyncedAt: null,
+    })
+    let isOnline = false
+    let remote = testTodo({
+      id: 'keep-local',
+      title: 'Remote',
+      notionPageId: 'page-keep-local',
+    })
+    let postCount = 0
+    const fetch = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        postCount += 1
+        const batch = JSON.parse(String(init.body)) as {
+          idempotencyKey: string
+          mutations: Array<{
+            key: string
+            value: TestTodo
+            base: Partial<TestTodo>
+          }>
+        }
+        if (postCount === 1) {
+          return Response.json(
+            {
+              error: {
+                code: 'property_conflict',
+                message: 'The title changed remotely.',
+                retryable: false,
+                conflicts: [
+                  {
+                    key: 'keep-local',
+                    mutationIndex: 0,
+                    field: 'title',
+                    baseValue: 'Original',
+                    localValue: 'Local',
+                    remoteValue: 'Remote',
+                  },
+                ],
+              },
+            },
+            { status: 409 },
+          )
+        }
+        expect(batch.mutations[0]).toMatchObject({
+          key: 'keep-local',
+          base: { title: 'Remote' },
+          value: { title: 'Local' },
+        })
+        remote = { ...remote, title: 'Local' }
+        return Response.json({ rows: [remote], deletedKeys: [] })
+      }
+      return Response.json({ rows: [remote], hasMore: false, nextCursor: null })
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: { isOnline: () => isOnline, pollIntervalMs: 0 },
+        id: 'keep-local-conflict',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: fetch as typeof globalThis.fetch,
+      }),
+    )
+
+    await collection.preload()
+    const transaction = collection.update('keep-local', (draft) => {
+      draft.title = 'Local'
+    })
+    await transaction.isPersisted.promise
+    const [before] = await collection.utils.getPendingMutations()
+    isOnline = true
+    await expect(collection.utils.syncNow()).rejects.toMatchObject({
+      code: 'property_conflict',
+    })
+
+    await collection.utils.resolvePropertyConflict(before!.id, {
+      action: 'keep-local',
+    })
+
+    expect(postCount).toBe(2)
+    expect(collection.get('keep-local')?.title).toBe('Local')
+    expect(collection.utils.getSyncState().blockedMutation).toBeNull()
+    expect(await collection.utils.getPendingMutations()).toHaveLength(0)
+    expect(await collection.utils.awaitRemote(transaction)).toMatchObject({
+      status: 'synced',
+      transactionId: transaction.id,
+      totalChunks: 1,
+    })
+    await collection.cleanup()
+  })
+
+  it('atomically rebases mixed conflict choices through later pending entries', async () => {
+    const storage = createMemoryNotionStorage()
+    const baseA = testTodo({ id: 'mixed-a', title: 'Base A' })
+    const localA = { ...baseA, title: 'Local A' }
+    const finalA = { ...localA, completed: true }
+    const baseB = testTodo({ id: 'mixed-b', title: 'Base B' })
+    const localB = { ...baseB, title: 'Local B' }
+    const finalB = { ...localB, title: 'Later B' }
+    const baseC = testTodo({ id: 'mixed-c', priority: 'High' })
+    const localC = { ...baseC, priority: 'Low' as const }
+    await storage.save('mixed-conflict-resolution', {
+      version: 2,
+      revision: 0,
+      rows: [finalA, finalB, localC],
+      outbox: [
+        {
+          id: 'blocked-bulk',
+          createdAt: new Date().toISOString(),
+          attempts: 1,
+          lastAttemptAt: new Date().toISOString(),
+          lastError: {
+            code: 'property_conflict',
+            message: 'Two titles changed remotely.',
+            status: 409,
+            retryable: false,
+            occurredAt: new Date().toISOString(),
+            conflicts: [
+              {
+                key: 'mixed-a',
+                mutationIndex: 1,
+                field: 'title',
+                baseValue: 'Base A',
+                localValue: 'Local A',
+                remoteValue: 'Remote A',
+              },
+              {
+                key: 'mixed-b',
+                mutationIndex: 2,
+                field: 'title',
+                baseValue: 'Base B',
+                localValue: 'Local B',
+                remoteValue: 'Remote B',
+              },
+            ],
+          },
+          batch: {
+            idempotencyKey: 'blocked-bulk',
+            mutations: [
+              {
+                type: 'update',
+                key: 'mixed-c',
+                value: localC,
+                base: { priority: 'High' },
+                changes: { priority: 'Low' },
+              },
+              {
+                type: 'update',
+                key: 'mixed-a',
+                value: localA,
+                base: { title: 'Base A' },
+                changes: { title: 'Local A' },
+              },
+              {
+                type: 'update',
+                key: 'mixed-b',
+                value: localB,
+                base: { title: 'Base B' },
+                changes: { title: 'Local B' },
+              },
+            ],
+          },
+        },
+        {
+          id: 'later-a',
+          createdAt: new Date().toISOString(),
+          attempts: 0,
+          lastAttemptAt: null,
+          lastError: null,
+          batch: {
+            idempotencyKey: 'later-a',
+            mutations: [
+              {
+                type: 'update',
+                key: 'mixed-a',
+                value: finalA,
+                base: { completed: false },
+                changes: { completed: true },
+              },
+            ],
+          },
+        },
+        {
+          id: 'later-b',
+          createdAt: new Date().toISOString(),
+          attempts: 0,
+          lastAttemptAt: null,
+          lastError: null,
+          batch: {
+            idempotencyKey: 'later-b',
+            mutations: [
+              {
+                type: 'update',
+                key: 'mixed-b',
+                value: finalB,
+                base: { title: 'Local B' },
+                changes: { title: 'Later B' },
+              },
+            ],
+          },
+        },
+      ],
+      lastSyncedAt: null,
+    })
+    const collection = createCollection(
+      notionCollectionOptions({
+        tuning: { isOnline: () => false, pollIntervalMs: 0 },
+        id: 'mixed-conflict-resolution',
+        endpoint: 'http://app.test/api/todos',
+        schema: testSchema,
+        storage,
+        fetch: vi.fn() as typeof globalThis.fetch,
+      }),
+    )
+    await collection.preload()
+
+    await expect(
+      collection.utils.resolvePropertyConflict('blocked-bulk', {
+        action: 'resolve',
+        resolutions: [
+          {
+            key: 'mixed-a',
+            mutationIndex: 1,
+            field: 'title',
+            choice: 'remote',
+          },
+          {
+            key: 'mixed-b',
+            mutationIndex: 2,
+            field: 'title',
+            choice: 'value',
+            value: 'Merged B',
+          },
+        ],
+      } as never),
+    ).rejects.toMatchObject({ code: 'data_loss_not_accepted' })
+
+    await collection.utils.resolvePropertyConflict('blocked-bulk', {
+      action: 'resolve',
+      resolutions: [
+        {
+          key: 'mixed-a',
+          mutationIndex: 1,
+          field: 'title',
+          choice: 'remote',
+        },
+        {
+          key: 'mixed-b',
+          mutationIndex: 2,
+          field: 'title',
+          choice: 'value',
+          value: 'Merged B',
+        },
+      ],
+      acceptDataLoss: true,
+    })
+
+    const pending = await collection.utils.getPendingMutations()
+    expect(pending).toHaveLength(3)
+    expect(pending[0]).toMatchObject({
+      id: 'blocked-bulk',
+      attempts: 0,
+      lastAttemptAt: null,
+      lastError: null,
+      batch: {
+        mutations: [
+          { key: 'mixed-c' },
+          {
+            key: 'mixed-b',
+            value: { title: 'Merged B' },
+            base: { title: 'Remote B' },
+            changes: { title: 'Merged B' },
+          },
+        ],
+      },
+    })
+    expect(pending[0]?.batch.idempotencyKey).not.toBe('blocked-bulk')
+    expect(pending[1]?.batch.mutations[0]).toMatchObject({
+      key: 'mixed-a',
+      value: { title: 'Remote A', completed: true },
+      base: { completed: false },
+      changes: { completed: true },
+    })
+    expect(pending[2]?.batch.mutations[0]).toMatchObject({
+      key: 'mixed-b',
+      value: { title: 'Later B' },
+      base: { title: 'Merged B' },
+      changes: { title: 'Later B' },
+    })
+    expect(collection.get('mixed-a')).toMatchObject({
+      title: 'Remote A',
+      completed: true,
+    })
+    expect(collection.get('mixed-b')?.title).toBe('Later B')
+    expect(collection.utils.getSyncState().blockedMutation).toBeNull()
     await collection.cleanup()
   })
 

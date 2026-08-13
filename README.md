@@ -230,6 +230,20 @@ await entries.utils.resolveDeletedMutation(blocked.entryId, {
 })
 ```
 
+Overlapping property edits include the affected row key, mutation index, and
+base/local/remote values. Keep every local value and atomically rebase the
+remaining FIFO outbox without reloading the page:
+
+```ts
+await entries.utils.resolvePropertyConflict(blocked.entryId, {
+  action: 'keep-local',
+})
+```
+
+Use `action: 'accept-remote'` with `acceptDataLoss: true` to accept every Notion
+value, or see [errors and recovery](docs/errors-and-recovery.md) for mixed
+field-by-field resolution.
+
 ## Page contents
 
 Database properties and page bodies are separate in Notion. For journals and

@@ -362,6 +362,7 @@ export function createNotionMutationExecutor<
 
   async function applyMutation(
     mutation: NotionMutation<TItem>,
+    mutationIndex: number,
     signal?: AbortSignal,
     prefetchedPages?: Map<string, NotionPageLike>,
   ): Promise<{ row?: TItem; deletedKey?: string }> {
@@ -447,7 +448,14 @@ export function createNotionMutationExecutor<
             !valuesEqual(remoteValue, baseValue) &&
             !valuesEqual(remoteValue, localValue)
           ) {
-            conflicts.push({ field, baseValue, localValue, remoteValue })
+            conflicts.push({
+              key: mutation.key,
+              mutationIndex,
+              field,
+              baseValue,
+              localValue,
+              remoteValue,
+            })
           } else if (!valuesEqual(remoteValue, localValue)) {
             pending.add(field)
           }
@@ -609,9 +617,20 @@ export function createNotionMutationExecutor<
                   config.schema.serialize(normalized.value),
                 ),
               },
-              () => applyMutation(normalized, signal, prefetchedPages),
+              () =>
+                applyMutation(
+                  normalized,
+                  mutationIndex,
+                  signal,
+                  prefetchedPages,
+                ),
             )
-          : await applyMutation(normalized, signal, prefetchedPages)
+          : await applyMutation(
+              normalized,
+              mutationIndex,
+              signal,
+              prefetchedPages,
+            )
       const result = config.idempotencyStore
         ? await config.idempotencyStore.execute(
             {
