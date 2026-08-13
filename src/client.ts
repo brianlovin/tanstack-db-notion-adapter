@@ -130,6 +130,36 @@ export type NotionRemoteTransactionResult = Exclude<
   { status: 'unknown' | 'pending' }
 >
 
+export type NotionPropertyConflictFieldResolution<TItem extends object> =
+  | {
+      key: string
+      mutationIndex: number
+      field: keyof TItem & string
+      choice: 'local'
+    }
+  | {
+      key: string
+      mutationIndex: number
+      field: keyof TItem & string
+      choice: 'remote'
+    }
+  | {
+      key: string
+      mutationIndex: number
+      field: keyof TItem & string
+      choice: 'value'
+      value: unknown
+    }
+
+export type NotionPropertyConflictResolutionOptions<TItem extends object> =
+  | { action: 'keep-local' }
+  | { action: 'accept-remote'; acceptDataLoss: true }
+  | {
+      action: 'resolve'
+      resolutions: Array<NotionPropertyConflictFieldResolution<TItem>>
+      acceptDataLoss: true
+    }
+
 export interface NotionCollectionUtils<TItem extends object> extends UtilsRecord {
   /** Enables automatic reconciliation and immediately synchronizes. */
   resumeSync: () => Promise<void>
@@ -164,6 +194,11 @@ export interface NotionCollectionUtils<TItem extends object> extends UtilsRecord
     options:
       | { action: 'recreate' }
       | { action: 'discard'; acceptDataLoss: true },
+  ) => Promise<void>
+  /** Resolves every field conflict on the blocked FIFO head and rebases later work. */
+  resolvePropertyConflict: (
+    entryId: string,
+    options: NotionPropertyConflictResolutionOptions<TItem>,
   ) => Promise<void>
   getQuarantinedState: () => Promise<NotionQuarantineRecord | null>
   discardQuarantinedState: (options: { acceptDataLoss: true }) => Promise<void>
@@ -274,6 +309,15 @@ function clone<T>(value: T): T {
 }
 
 function rowsEqual(left: object, right: object): boolean {
+  if (left === right) return true
+  try {
+    return JSON.stringify(left) === JSON.stringify(right)
+  } catch {
+    return false
+  }
+}
+
+function valuesEqual(left: unknown, right: unknown): boolean {
   if (left === right) return true
   try {
     return JSON.stringify(left) === JSON.stringify(right)
@@ -2496,6 +2540,287 @@ export function notionCollectionOptions<const TFields extends NotionFields>(
         }),
       )
       await synchronize('full')
+    },
+    async resolvePropertyConflict(entryId, options) {
+      await initialization
+      if (
+        options.action !== 'keep-local' &&
+        options.acceptDataLoss !== true
+      ) {
+        throw new NotionSyncError({
+          code: 'data_loss_not_accepted',
+          message:
+            'Replacing a local conflict value requires acceptDataLoss: true.',
+          retryable: false,
+        })
+      }
+
+      await exclusive(() =>
+        crossTab(async () => {
+          await reload()
+          const index = state.outbox.findIndex((entry) => entry.id === entryId)
+          if (index < 0) {
+            throw new NotionSyncError({
+              code: 'outbox_entry_not_found',
+              message: 'The pending mutation no longer exists.',
+              retryable: false,
+            })
+          }
+          if (index !== 0) {
+            throw new NotionSyncError({
+              code: 'property_conflict_not_resolvable',
+              message: 'Only the blocked head mutation can be resolved.',
+              retryable: false,
+            })
+          }
+
+          const entry = state.outbox[0]!
+          const conflicts = entry.lastError?.conflicts ?? []
+          if (
+            entry.lastError?.code !== 'property_conflict' ||
+            conflicts.length === 0
+          ) {
+            throw new NotionSyncError({
+              code: 'property_conflict_not_resolvable',
+              message:
+                'Only a pending mutation blocked by property_conflict can be resolved this way.',
+              retryable: false,
+            })
+          }
+
+          const resolutionId = (value: {
+            key: string
+            mutationIndex: number
+            field: string
+          }) => `${value.mutationIndex}\u0000${value.key}\u0000${value.field}`
+          const requested = new Map<
+            string,
+            NotionPropertyConflictFieldResolution<TItem>
+          >()
+          if (options.action === 'resolve') {
+            for (const resolution of options.resolutions) {
+              const id = resolutionId(resolution)
+              if (requested.has(id)) {
+                throw new NotionSyncError({
+                  code: 'invalid_property_conflict_resolution',
+                  message: 'A property conflict was resolved more than once.',
+                  retryable: false,
+                })
+              }
+              requested.set(id, resolution)
+            }
+          }
+
+          const outbox = clone(state.outbox)
+          const blocked = outbox[0]!
+          const resolvedTransactionId = transactionIdForEntry(blocked)
+          const resolvedChunkCount = chunkCountForEntry(blocked)
+          const visible = new Map(
+            state.rows.map((row) => [config.schema.getKey(row), clone(row)]),
+          )
+          const seen = new Set<string>()
+
+          for (const conflict of conflicts) {
+            if (
+              typeof conflict.key !== 'string' ||
+              !Number.isInteger(conflict.mutationIndex) ||
+              conflict.mutationIndex < 0 ||
+              typeof conflict.field !== 'string'
+            ) {
+              throw new NotionSyncError({
+                code: 'property_conflict_not_resolvable',
+                message:
+                  'The conflict does not identify its row and mutation. Retry with a current server before resolving it.',
+                retryable: false,
+              })
+            }
+            const id = resolutionId(conflict)
+            if (seen.has(id)) {
+              throw new NotionSyncError({
+                code: 'property_conflict_not_resolvable',
+                message: 'The blocked entry contains a duplicate property conflict.',
+                retryable: false,
+              })
+            }
+            seen.add(id)
+
+            const mutation = blocked.batch.mutations[conflict.mutationIndex]
+            if (
+              mutation?.type !== 'update' ||
+              mutation.key !== conflict.key ||
+              !Object.hasOwn(mutation.changes, conflict.field) ||
+              !valuesEqual(
+                (mutation.base as Record<string, unknown>)[conflict.field],
+                conflict.baseValue,
+              ) ||
+              !valuesEqual(
+                (mutation.changes as Record<string, unknown>)[conflict.field],
+                conflict.localValue,
+              )
+            ) {
+              throw new NotionSyncError({
+                code: 'property_conflict_not_resolvable',
+                message: 'The blocked mutation no longer matches its conflict details.',
+                retryable: false,
+              })
+            }
+
+            let choice: 'local' | 'remote' | 'value'
+            let resolvedValue: unknown
+            if (options.action === 'keep-local') {
+              choice = 'local'
+              resolvedValue = conflict.localValue
+            } else if (options.action === 'accept-remote') {
+              choice = 'remote'
+              resolvedValue = conflict.remoteValue
+            } else {
+              const resolution = requested.get(id)
+              if (!resolution) {
+                throw new NotionSyncError({
+                  code: 'invalid_property_conflict_resolution',
+                  message: 'Every property conflict must have one resolution.',
+                  retryable: false,
+                })
+              }
+              choice = resolution.choice
+              resolvedValue =
+                resolution.choice === 'local'
+                  ? conflict.localValue
+                  : resolution.choice === 'remote'
+                    ? conflict.remoteValue
+                    : resolution.value
+            }
+
+            const mutationValue = mutation.value as Record<string, unknown>
+            const mutationBase = mutation.base as Record<string, unknown>
+            const mutationChanges = mutation.changes as Record<string, unknown>
+            mutationValue[conflict.field] = clone(resolvedValue)
+            if (
+              choice === 'remote' ||
+              valuesEqual(resolvedValue, conflict.remoteValue)
+            ) {
+              delete mutationBase[conflict.field]
+              delete mutationChanges[conflict.field]
+            } else {
+              mutationBase[conflict.field] = clone(conflict.remoteValue)
+              mutationChanges[conflict.field] = clone(resolvedValue)
+            }
+
+            let propagatedValue = clone(resolvedValue)
+            let reachesVisibleRow = true
+            following: for (
+              let entryIndex = 0;
+              entryIndex < outbox.length;
+              entryIndex += 1
+            ) {
+              const pending = outbox[entryIndex]!
+              const start =
+                entryIndex === 0 ? conflict.mutationIndex + 1 : 0
+              for (
+                let mutationIndex = start;
+                mutationIndex < pending.batch.mutations.length;
+                mutationIndex += 1
+              ) {
+                const followingMutation = pending.batch.mutations[mutationIndex]!
+                if (followingMutation.key !== conflict.key) continue
+                if (followingMutation.type !== 'update') {
+                  reachesVisibleRow = false
+                  break following
+                }
+                const followingValue =
+                  followingMutation.value as Record<string, unknown>
+                const followingChanges =
+                  followingMutation.changes as Record<string, unknown>
+                const followingBase =
+                  followingMutation.base as Record<string, unknown>
+                followingValue[conflict.field] = clone(propagatedValue)
+                if (Object.hasOwn(followingChanges, conflict.field)) {
+                  followingBase[conflict.field] = clone(propagatedValue)
+                  propagatedValue = clone(followingChanges[conflict.field])
+                  followingValue[conflict.field] = clone(propagatedValue)
+                }
+              }
+            }
+
+            if (reachesVisibleRow) {
+              const row = visible.get(conflict.key)
+              if (row) {
+                const nextRow = clone(row) as Record<string, unknown>
+                nextRow[conflict.field] = clone(propagatedValue)
+                visible.set(conflict.key, nextRow as TItem)
+              }
+            }
+          }
+
+          if (options.action === 'resolve' && requested.size !== seen.size) {
+            throw new NotionSyncError({
+              code: 'invalid_property_conflict_resolution',
+              message: 'A resolution does not match any blocked property conflict.',
+              retryable: false,
+            })
+          }
+
+          blocked.batch.mutations = blocked.batch.mutations.filter(
+            (mutation) =>
+              mutation.type !== 'update' ||
+              Object.keys(mutation.changes).length > 0,
+          )
+          for (const pending of outbox) {
+            for (const mutation of pending.batch.mutations) {
+              const validation = await config.schema['~standard'].validate(
+                mutation.value,
+              )
+              if ('issues' in validation) {
+                throw new NotionSyncError({
+                  code: 'invalid_property_conflict_resolution',
+                  message: 'A resolved value does not match the collection schema.',
+                  retryable: false,
+                })
+              }
+              mutation.value = validation.value
+            }
+          }
+
+          let transactionCompletedByResolution = false
+          if (blocked.batch.mutations.length === 0) {
+            outbox.shift()
+            transactionCompletedByResolution = !outbox.some(
+              (pending) =>
+                transactionIdForEntry(pending) === resolvedTransactionId,
+            )
+          } else {
+            outbox[0] = {
+              ...blocked,
+              attempts: 0,
+              lastAttemptAt: null,
+              lastError: null,
+              batch: {
+                ...blocked.batch,
+                idempotencyKey: randomInstanceId(),
+              },
+            }
+          }
+          await commitState(
+            {
+              ...state,
+              rows: [...visible.values()],
+              outbox,
+              remoteTransactionReceipts: transactionCompletedByResolution
+                ? appendRemoteReceipt(state.remoteTransactionReceipts, {
+                    transactionId: resolvedTransactionId,
+                    status: 'synced',
+                    completedAt: new Date().toISOString(),
+                    totalChunks: resolvedChunkCount,
+                  })
+                : state.remoteTransactionReceipts,
+            },
+            visible,
+          )
+        }),
+      )
+
+      if (online()) await synchronize('full')
+      else setSyncState({ status: 'offline', error: null })
     },
     async getQuarantinedState() {
       await initialization

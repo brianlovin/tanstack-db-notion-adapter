@@ -97,7 +97,10 @@ non-retryably instead of succeeding as a no-op. The server then compares only
 the changed fields with the current Notion page. Remote changes to other
 properties survive. If the same property differs from both the base and
 intended value, no patch is sent and `property_conflict` includes the base,
-local, and remote values for explicit recovery.
+local, and remote values plus the row key and mutation index for explicit
+recovery. Conflict resolution rewrites the blocked head with a fresh batch
+idempotency key and rebases later full-row overlays for each affected row under
+the collection lock before flushing resumes.
 
 ## Content revisions
 

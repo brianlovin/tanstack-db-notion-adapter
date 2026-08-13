@@ -28,6 +28,8 @@ export {
   type NotionCollectionUtils,
   type NotionCollectionTuning,
   type ClearNotionStorageScopeOptions,
+  type NotionPropertyConflictFieldResolution,
+  type NotionPropertyConflictResolutionOptions,
   type NotionOutboxEntry,
   type NotionOutboxError,
   type NotionRemoteTransactionReceipt,

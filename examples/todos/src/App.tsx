@@ -46,6 +46,7 @@ function BlockedMutationNotice({
 }) {
   const [busy, setBusy] = useState(false)
   const deleted = blocked.error.code === 'page_not_found'
+  const propertyConflict = blocked.error.code === 'property_conflict'
 
   function run(action: () => Promise<unknown>): void {
     setBusy(true)
@@ -70,19 +71,51 @@ function BlockedMutationNotice({
         >
           Retry
         </button>
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() =>
-            run(() =>
-              todoCollection.utils.discardPendingMutation(blocked.entryId, {
-                acceptDataLoss: true,
-              }),
-            )
-          }
-        >
-          Discard local change
-        </button>
+        {propertyConflict ? (
+          <>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                run(() =>
+                  todoCollection.utils.resolvePropertyConflict(blocked.entryId, {
+                    action: 'keep-local',
+                  }),
+                )
+              }
+            >
+              Keep local values
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                run(() =>
+                  todoCollection.utils.resolvePropertyConflict(blocked.entryId, {
+                    action: 'accept-remote',
+                    acceptDataLoss: true,
+                  }),
+                )
+              }
+            >
+              Use Notion values
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              run(() =>
+                todoCollection.utils.discardPendingMutation(blocked.entryId, {
+                  acceptDataLoss: true,
+                }),
+              )
+            }
+          >
+            Discard local change
+          </button>
+        )}
         {deleted ? (
           <>
             <button

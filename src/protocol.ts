@@ -21,6 +21,10 @@ export type NotionMutation<TItem extends object> =
   | { type: 'delete'; key: string; value: TItem }
 
 export interface NotionPropertyConflict {
+  /** Stable client-owned row identity for the conflicting update. */
+  key: string
+  /** Zero-based position of the update in its mutation batch. */
+  mutationIndex: number
   field: string
   baseValue: unknown
   localValue: unknown

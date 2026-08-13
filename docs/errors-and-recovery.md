@@ -111,7 +111,33 @@ split or retried rather than partially transformed.
 - `schema_mismatch`: run `doctor`, `pull`, or `push --dry-run`; compare stable
   property IDs before changing data.
 - `property_conflict`: show each field's base, local, and remote value. Let the
-  user choose, then retry from refreshed state or explicitly discard.
+  user choose, then resolve the blocked entry atomically. Keep every local
+  value without a data-loss acknowledgement:
+
+  ```ts
+  await collection.utils.resolvePropertyConflict(blocked.entryId, {
+    action: 'keep-local',
+  })
+  ```
+
+  Accept every remote value explicitly, or resolve a mixed batch field by
+  field using the conflict's row key and mutation index:
+
+  ```ts
+  await collection.utils.resolvePropertyConflict(blocked.entryId, {
+    action: 'resolve',
+    resolutions: blocked.error.conflicts.map((conflict) => ({
+      key: conflict.key,
+      mutationIndex: conflict.mutationIndex,
+      field: conflict.field,
+      choice: conflict.field === 'title' ? 'local' : 'remote',
+    })),
+    acceptDataLoss: true,
+  })
+  ```
+
+  Resolution rebases later pending updates for the affected rows and resumes
+  the FIFO outbox. Choosing a custom value uses `choice: 'value'` plus `value`.
 - `page_content_conflict`: keep both Markdown bodies. Accept the remote copy or
   explicitly overwrite with `acceptDataLoss: true`.
 - `page_content_incomplete`: leave replacement disabled. Implement a targeted
