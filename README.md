@@ -138,6 +138,34 @@ this device,” not “saved in Notion.” A server rejection never rejects the
 transaction and there is no automatic rollback. Observe failures through sync
 state and recover them explicitly.
 
+Use the returned TanStack transaction as an adapter receipt when one product
+action needs an exact remote outcome:
+
+```ts
+const tx = entries.update(entry.id, (draft) => {
+  draft.title = 'A better title'
+})
+
+await tx.isPersisted.promise // durable locally
+const result = await entries.utils.awaitRemote(tx)
+// result.status: 'synced' | 'blocked' | 'cancelled'
+```
+
+`awaitRemote` observes the FIFO outbox; it does not bypass earlier work or force
+a synchronization attempt. `getRemoteTransactionStatus(tx)` provides the
+non-blocking form and reports bounded-chunk progress for bulk transactions.
+The latest 100 terminal receipts are durable by default.
+
+Undo may cancel a transaction only before any of its chunks begins delivery:
+
+```ts
+await entries.utils.cancelRemoteTransaction(tx)
+```
+
+Cancellation atomically rolls back its optimistic rows and rebases later
+pending updates. If delivery was attempted or acknowledged, enqueue an ordinary
+inverse collection mutation instead.
+
 Use `blockedMutation` from `useNotionSyncState` to show when the FIFO outbox
 head needs attention:
 

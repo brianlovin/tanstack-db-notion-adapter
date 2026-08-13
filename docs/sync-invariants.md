@@ -25,6 +25,13 @@ row are one local checkpoint. If that checkpoint fails, the old durable head
 remains and is retried idempotently. Later pending mutations overlay the
 returned row so an older response cannot hide newer local intent.
 
+Every bounded chunk carries its parent TanStack transaction ID. The final chunk
+checkpoint writes a bounded durable remote receipt in the same commit. A
+never-attempted transaction may be cancelled under the collection lock; its
+optimistic effects are reversed and later pending full rows are rebased before
+one CAS commit. Once any chunk starts delivery, cancellation is forbidden
+because an unavailable response cannot prove the remote write did not happen.
+
 A successful write does not require a complete collection pull. With webhook
 invalidation enabled, the server returns the version observed before the batch
 and the version after recording the batch's event. The client advances through

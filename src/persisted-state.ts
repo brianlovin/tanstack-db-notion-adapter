@@ -26,11 +26,22 @@ export interface NotionOutboxError {
 
 export interface NotionOutboxEntry<TItem extends object> {
   id: string
+  /** Parent TanStack transaction shared by every bounded chunk. */
+  transactionId?: string
+  chunkIndex?: number
+  chunkCount?: number
   createdAt: string
   attempts: number
   lastAttemptAt: string | null
   lastError: NotionOutboxError | null
   batch: NotionMutationBatch<TItem>
+}
+
+export interface NotionRemoteTransactionReceipt {
+  transactionId: string
+  status: 'synced' | 'cancelled'
+  completedAt: string
+  totalChunks: number
 }
 
 export interface LegacyNotionPersistedState<TItem extends object> {
@@ -57,6 +68,8 @@ export interface NotionPersistedState<TItem extends object> {
   lastFullReconciledAt?: number | undefined
   remoteVersion?: number | undefined
   pagination?: NotionRemotePaginationState | undefined
+  /** Bounded terminal receipts for application transaction IDs. */
+  remoteTransactionReceipts?: Array<NotionRemoteTransactionReceipt> | undefined
 }
 
 export type NotionPersistedEnvelope<TItem extends object> =

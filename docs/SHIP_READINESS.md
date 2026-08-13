@@ -101,6 +101,8 @@ resource use.
   base/local/remote values.
 - [x] Add multi-tab, lost-response, concurrent-insert, poison-entry, and FIFO
   regression tests.
+- [x] Persist transaction-level remote receipts across bounded chunks and allow
+  atomic cancellation only before remote delivery begins.
 
 Acceptance criteria: no batch size, bad entry, tab count, process restart, or
 lost response can silently lose an acknowledged edit or create a duplicate.
