@@ -85,6 +85,11 @@ export interface NotionPageContentClient {
   subscribe: (listener: () => void) => () => void
   /** Creates a durable local draft. Call this before inserting a new row. */
   createDraft: (key: string, initialMarkdown?: string) => Promise<void>
+  /** Deletes one durable local content record without changing Notion. */
+  discardDraft: (
+    key: string,
+    options: { acceptDataLoss: true },
+  ) => Promise<void>
   /** Fetches and merges a known page. Prefer attachPage for editable content. */
   load: (key: string, notionPageId: string) => Promise<NotionPageContentSnapshot>
   /** Creates a missing draft, loads the page, and schedules pending content. */
@@ -613,6 +618,25 @@ export function createNotionPageContentClient<
         await persist(next)
       })
       await attachAvailablePages()
+    },
+    async discardDraft(key, options) {
+      if (options.acceptDataLoss !== true) {
+        throw new NotionSyncError({
+          code: 'data_loss_not_accepted',
+          message: 'Discarding a page-content draft requires acceptDataLoss: true.',
+          retryable: false,
+        })
+      }
+      await initialization
+      const timer = timers.get(key)
+      if (timer) clearTimeout(timer)
+      timers.delete(key)
+      await exclusive(async () => {
+        if (!records.has(key)) return
+        const next = new Map(records)
+        next.delete(key)
+        await persist(next)
+      })
     },
     async load(key, notionPageId) {
       await initialization

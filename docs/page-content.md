@@ -53,6 +53,17 @@ await noteContent.update(note.id, nextMarkdown)
 `flush(id)` for save-now or retry behavior. `load` is the lower-level remote
 read; most editors should use `attachPage`.
 
+If the user cancels a new row or explicitly abandons locally cached content,
+delete that one durable content record with an explicit data-loss acknowledgement:
+
+```ts
+await noteContent.discardDraft(id, { acceptDataLoss: true })
+```
+
+This removes only the local draft/cache. It does not edit or delete an attached
+Notion page. The operation is idempotent, so cancellation cleanup may call it
+even when draft creation did not finish.
+
 ## Direct edits in Notion
 
 `useNotionPageContent` watches the currently rendered page. Watched pages are
