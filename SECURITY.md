@@ -51,6 +51,12 @@ policy rather than an adapter feature: document it clearly, never retain the
 password, honor an explicit server rejection, and clear the marker plus
 account-scoped caches when identities change.
 
+For multi-account applications, pass the same stable `storageScope` to the row
+collection and page-content client before either is constructed. The scope also
+separates writer locks and cross-tab notifications. It prevents one account's
+cache from rendering or flushing through another account's client, but it does
+not encrypt browser data or replace server authorization.
+
 ## Reporting a vulnerability
 
 Do not file an issue containing tokens, private Notion content, or an exploit

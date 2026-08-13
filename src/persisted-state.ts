@@ -6,6 +6,14 @@ import type {
 
 export { createSerializedQueue }
 
+export function createNotionStorageId(id: string, scope?: string): string {
+  if (scope === undefined) return id
+  if (scope.length === 0) {
+    throw new Error('storageScope must be a non-empty stable account identifier.')
+  }
+  return `scope:${scope.length}:${scope}:${id}`
+}
+
 export class NotionPersistedStateError extends Error {
   readonly code = 'persisted_state_quarantined'
 

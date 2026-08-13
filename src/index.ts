@@ -21,11 +21,13 @@ export {
 } from './schema.js'
 
 export {
+  clearNotionStorageScope,
   notionCollectionOptions,
   NotionSyncError,
   type NotionCollectionConfig,
   type NotionCollectionUtils,
   type NotionCollectionTuning,
+  type ClearNotionStorageScopeOptions,
   type NotionOutboxEntry,
   type NotionOutboxError,
   type NotionSyncProgress,
