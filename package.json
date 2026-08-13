@@ -1,6 +1,6 @@
 {
   "name": "tanstack-db-notion-adapter",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Offline-first, end-to-end typed TanStack DB collections backed by Notion data sources",
   "repository": {
     "type": "git",
